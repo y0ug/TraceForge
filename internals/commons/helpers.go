@@ -4,15 +4,16 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
 
 type Server struct {
-	Logger *logrus.Logger
+	Logger *log.Logger
 }
 
 func (s *Server) LoggingMiddleware() mux.MiddlewareFunc {
@@ -28,7 +29,7 @@ func (s *Server) LoggingMiddleware() mux.MiddlewareFunc {
 			duration := time.Since(start)
 
 			// Log the incoming request
-			s.Logger.WithFields(logrus.Fields{
+			s.Logger.WithFields(log.Fields{
 				"path":     r.URL.Path,
 				"method":   r.Method,
 				"ip":       getClientIP(r),
@@ -36,6 +37,14 @@ func (s *Server) LoggingMiddleware() mux.MiddlewareFunc {
 			}).Info("request")
 		})
 	}
+}
+
+func GetEnv(key string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists {
+		log.Fatalf("%s must be set", key)
+	}
+	return value
 }
 
 func getClientIP(r *http.Request) string {
