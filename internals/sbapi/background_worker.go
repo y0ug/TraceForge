@@ -20,7 +20,7 @@ func (s *Server) HasherTask() {
 
 	for {
 		// Fetch files needing hash calculation
-		rows, err := s.DB.Query(`
+		rows, err := s.DB.DB.Query(`
             SELECT id, s3_key
             FROM file_uploads
             WHERE sha256 == "" AND is_uploaded IS true
@@ -81,7 +81,7 @@ func (s *Server) processFile(file FileInfo) error {
 	hash1 := hex.EncodeToString(hash.Sum(nil))
 
 	// Update the database with the hash
-	stmt, err := s.DB.Prepare(`
+	stmt, err := s.DB.DB.Prepare(`
         UPDATE file_uploads
         SET sha1= ?, sha256 = ?
         WHERE id = ?
@@ -113,7 +113,7 @@ func (s *Server) CleanupTask() {
 }
 
 func (s *Server) cleanupExpiredEntries() {
-	rows, err := s.DB.Query(`
+	rows, err := s.DB.DB.Query(`
         SELECT id, s3_key FROM file_uploads
         WHERE expires_at <= datetime('now') AND is_uploaded IS false 
     `)
@@ -144,7 +144,7 @@ func (s *Server) cleanupExpiredEntries() {
 }
 
 func (s *Server) deleteFileUpload(id uuid.UUID, s3Key string) {
-	tx, err := s.DB.Begin()
+	tx, err := s.DB.DB.Begin()
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to begin transaction")
 		return

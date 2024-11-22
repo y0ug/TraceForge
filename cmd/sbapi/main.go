@@ -3,7 +3,6 @@ package main
 import (
 	"TraceForge/internals/commons"
 	"TraceForge/internals/sbapi"
-	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -32,6 +31,15 @@ func main() {
 		log.Warning("Error loading .env file")
 	}
 
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "./api.db"
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8081"
+	}
+
 	config := sbapi.Config{
 		AuthToken:      commons.GetEnv("AUTH_TOKEN"),
 		HvApiAuthToken: commons.GetEnv("HV_API_AUTH_TOKEN"),
@@ -50,16 +58,15 @@ func main() {
 	})
 
 	// Initialize SQLite database
-	dbPath := "./api.db"
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sbapi.NewDb(dbPath)
 	if err != nil {
-		logger.Fatalf("Failed to connect to SQLite: %v", err)
+		logger.WithError(err).Fatal("Failed NewDB")
 	}
-	defer db.Close()
+	defer db.DB.Close()
 
-	err = sbapi.CreateTables(db)
+	err = db.CreateTables()
 	if err != nil {
-		logger.Fatalf("Failed to create table: %v", err)
+		logger.WithError(err).Fatal("Failed to create tables")
 	}
 
 	server := &sbapi.Server{
@@ -88,10 +95,10 @@ func main() {
 	go server.HasherTask()
 
 	// Start the server
-	port := 8081
-	logger.Infof("Server listening on :%d", port)
+	listenOn := fmt.Sprintf(":%s", port)
+	logger.Infof("Server listening on %s", listenOn)
 	if err := http.ListenAndServe(
-		fmt.Sprintf(":%d", port), router); err != nil {
+		listenOn, router); err != nil {
 		logger.Fatal(err)
 	}
 }

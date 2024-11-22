@@ -1,21 +1,34 @@
 package main
 
 import (
-	"bytes"
+	"TraceForge/internals/mq"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
+type Task struct {
+	TaskID    string      `json:"task_id"`
+	Operation string      `json:"operation"`
+	Data      interface{} `json:"data"`
+}
+
 func main() {
-	agentUUID := flag.String("uuid", "", "The UUID of the agent")
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.TextFormatter{
+		DisableColors: false,
+		FullTimestamp: true,
+	})
+	logger.SetOutput(os.Stdout)
+	logger.SetLevel(logrus.InfoLevel)
+	agentUUID := flag.String("uuid", uuid.NewString(), "The UUID of the agent")
 	serverURL := flag.String("url", "http://127.0.0.1:8888", "The URL of the queue")
 
 	flag.Parse()
@@ -24,19 +37,21 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	fmt.Println("Client is running. Press Ctrl+C to exit.")
+	logger.
+		WithFields(logrus.Fields{"agent_uuid": *agentUUID, "server_url": *serverURL}).
+		Info("Starting client. Press Ctrl+C to exit.")
 
-	// Initial pull before entering the loop
-	handleMessage(*serverURL, *agentUUID)
+	client := mq.NewClient(*serverURL)
 
+	handleMessage(logger, client, *agentUUID)
 loop:
 	for {
 		select {
 		case <-stop:
-			fmt.Println("\nExiting client.")
+			logger.Info("Exiting client.")
 			break loop
 		case <-timeout(4 * time.Second): // Timeout-driven loop
-			handleMessage(*serverURL, *agentUUID)
+			handleMessage(logger, client, *agentUUID)
 		}
 	}
 }
@@ -54,84 +69,27 @@ func timeout(duration time.Duration) <-chan bool {
 }
 
 // handleMessage encapsulates the logic to pull and process messages
-func handleMessage(serverURL, agentUUID string) {
-	err := pullAndProcessMessage(serverURL, agentUUID)
+func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string) {
+	msg, err := client.PullMessage(agentID)
 	if err != nil {
-		log.Printf("Error pulling message: %v", err)
+		logger.WithError(err).Error("Failed to pull message")
+		return
 	}
-}
 
-func pushMessage(serverURL, agentID, body string) error {
-	pushBody := map[string]string{"agent_id": agentID, "body": body}
-	pushData, _ := json.Marshal(pushBody)
+	if msg == nil {
+		logger.Info("No messages available")
+		return
+	}
+	var task Task
+	if err := json.Unmarshal([]byte(msg.Body), &task); err != nil {
+		logger.WithError(err).Error("failed to parse message body")
+	}
 
-	resp, err := http.Post(serverURL+"/push", "application/json", bytes.NewReader(pushData))
+	// Process the task
+	fmt.Printf("Agent %s processing task: %+v\n", agentID, task)
+	err = client.DeleteMessage(msg.ID)
 	if err != nil {
-		return fmt.Errorf("failed to push message: %w", err)
+		logger.WithError(err).Error("Failed to delete message")
+		return
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		responseBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected response from server: %s", string(responseBody))
-	}
-
-	return nil
-}
-
-func pullAndProcessMessage(serverURL, agentID string) error {
-	resp, err := http.Get(fmt.Sprintf("%s/pull?agent_id=%s", serverURL, agentID))
-	if err != nil {
-		return fmt.Errorf("failed to pull message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		log.Println("No messages available")
-		return nil
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	var message struct {
-		ID      int    `json:"id"`
-		AgentID string `json:"agent_id"`
-		Body    string `json:"body"`
-	}
-	if err := json.Unmarshal(body, &message); err != nil {
-		return fmt.Errorf("failed to parse message: %w", err)
-	}
-
-	log.Printf("Pulled message: %+v\n", message)
-
-	// Simulate processing the message
-	time.Sleep(2 * time.Second)
-	log.Printf("Processed message: %s\n", message.Body)
-
-	// Delete the message after processing
-	return deleteMessage(serverURL, message.ID)
-}
-
-func deleteMessage(serverURL string, messageID int) error {
-	deleteBody := map[string]int{"id": messageID}
-	deleteData, _ := json.Marshal(deleteBody)
-
-	req, err := http.NewRequest(http.MethodDelete, serverURL+"/delete", bytes.NewReader(deleteData))
-	if err != nil {
-		return fmt.Errorf("failed to create delete request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected response from server: %s", string(responseBody))
-	}
-
-	log.Println("Message deleted successfully")
-	return nil
 }

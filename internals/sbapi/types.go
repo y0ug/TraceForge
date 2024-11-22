@@ -13,7 +13,11 @@ type Server struct {
 	*commons.Server
 	Config   Config
 	S3Client *s3.Client
-	DB       *sql.DB
+	DB       *DB
+}
+
+type DB struct {
+	DB *sql.DB
 }
 
 type Config struct {

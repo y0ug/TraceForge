@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -17,39 +18,12 @@ import (
 )
 
 func (s *Server) GetFilesHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.DB.Query(`
-        SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_uploaded, sha1, sha256
-        FROM file_uploads 
-        ORDER BY created_at DESC
-    `)
+	ctx := r.Context()
+	files, err := s.DB.GetFiles(ctx)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to query uploads")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
+		s.Logger.WithError(err).Error("Failed to query files")
 	}
-	defer rows.Close()
-
-	var uploads []FileInfo
-	for rows.Next() {
-		var upload FileInfo
-		if err := rows.Scan(&upload.ID,
-			&upload.Filename,
-			&upload.S3Key,
-			&upload.CreatedAt,
-			&upload.ExpiresAt,
-			&upload.UpdatedAt,
-			&upload.IsUploaded,
-			&upload.Sha1,
-			&upload.Sha256,
-		); err != nil {
-			s.Logger.WithError(err).Error("Failed to scan row")
-			continue
-		}
-
-		uploads = append(uploads, upload)
-
-	}
-	commons.WriteSuccessResponse(w, "", uploads)
+	commons.WriteSuccessResponse(w, "", files)
 }
 
 func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +44,7 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	expiresIn := 15 * 60
-	stmt, err := s.DB.Prepare(fmt.Sprintf(`
+	stmt, err := s.DB.DB.Prepare(fmt.Sprintf(`
         INSERT INTO file_uploads (id, s3_key, created_at, expires_at, updated_at, is_uploaded)
         VALUES (?, ?, datetime('now'), datetime('now', '+%d seconds'), datetime('now'), false)
     `, expiresIn))
@@ -116,11 +90,12 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	vars := mux.Vars(r)
 	fileID := vars["file_id"]
 
 	var s3Key string
-	err := s.DB.QueryRow("SELECT s3_key FROM file_uploads WHERE id = ?", fileID).Scan(&s3Key)
+	err := s.DB.DB.QueryRowContext(ctx, "SELECT s3_key FROM file_uploads WHERE id = ?", fileID).Scan(&s3Key)
 	if err != nil {
 		commons.WriteErrorResponse(w, "File id not found", http.StatusNotFound)
 		s.Logger.WithFields(log.Fields{
@@ -148,7 +123,7 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stmt, err := s.DB.Prepare(`
+	stmt, err := s.DB.DB.PrepareContext(ctx, `
         UPDATE file_uploads
         SET is_uploaded = true,updated_at = datetime('now')
         WHERE id = ?
@@ -160,7 +135,7 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(fileID)
+	_, err = stmt.ExecContext(ctx, fileID)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to update upload record")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -175,6 +150,7 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	vars := mux.Vars(r)
 	fileID := vars["file_id"]
 
@@ -188,7 +164,7 @@ func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stmt, err := s.DB.Prepare(`
+	stmt, err := s.DB.DB.PrepareContext(ctx, `
         UPDATE file_uploads
         SET filename = ?, updated_at = datetime('now')
         WHERE id = ?
@@ -200,7 +176,7 @@ func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(params.Filename, fileID)
+	_, err = stmt.ExecContext(ctx, params.Filename, fileID)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to update upload record")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -216,87 +192,63 @@ func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) GetFileHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	vars := mux.Vars(r)
 	fileID := vars["file_id"]
 
-	var upload FileInfo
-	err := s.DB.QueryRow(`
-        SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_uploaded ,sha1, sha256
-        FROM file_uploads
-        WHERE id = ?
-    `, fileID).Scan(
-		&upload.ID,
-		&upload.Filename,
-		&upload.S3Key,
-		&upload.CreatedAt,
-		&upload.ExpiresAt,
-		&upload.UpdatedAt,
-		&upload.IsUploaded,
-		&upload.Sha1,
-		&upload.Sha256,
-	)
+	file, err := s.DB.GetFile(ctx, fileID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			s.Logger.WithError(err).Warn("File not found")
 			commons.WriteErrorResponse(w, "File not found", http.StatusNotFound)
 		} else {
-			s.Logger.WithError(err).Error("Failed to query file")
+			s.Logger.WithError(err).WithFields(log.Fields{"id": fileID}).Error("Failed to query file")
 			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		}
 		return
 	}
-	s.Logger.WithFields(log.Fields{"id": upload.ID}).Info("file info")
-	commons.WriteSuccessResponse(w, "", upload)
+	s.Logger.WithFields(log.Fields{"id": fileID}).Info("file info")
+	commons.WriteSuccessResponse(w, "", file)
 }
 
 func (s *Server) DeleteFileHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	vars := mux.Vars(r)
 	fileID := vars["file_id"]
 
-	var s3Key string
-	err := s.DB.QueryRow("SELECT s3_key FROM file_uploads WHERE id = ?", fileID).Scan(&s3Key)
+	file, err := s.DB.GetFile(ctx, fileID)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to get s3_key for file_id")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		if errors.Is(err, sql.ErrNoRows) {
+			s.Logger.WithError(err).Warn("File not found")
+			commons.WriteErrorResponse(w, "File not found", http.StatusNotFound)
+		} else {
+			s.Logger.WithError(err).WithFields(log.Fields{"id": fileID}).Error("Failed to query file")
+			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		}
 		return
 	}
 
-	tx, err := s.DB.Begin()
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to begin transaction")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	_, err = tx.Exec("DELETE FROM file_uploads WHERE id = ?", fileID)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to delete record")
-		tx.Rollback()
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	_, err = s.S3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+	// Originaly I was using a SQL transaction here
+	_, err = s.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.Config.S3BucketName),
-		Key:    aws.String(s3Key),
+		Key:    aws.String(file.S3Key),
 	})
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to delete S3 object")
-		tx.Rollback()
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := tx.Commit(); err != nil {
-		s.Logger.WithError(err).Error("Failed to commit transaction")
+	if err := s.DB.DeleteFile(ctx, fileID); err != nil {
+		s.Logger.WithError(err).Error("Failed to delete file in DB")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	s.Logger.WithFields(log.Fields{
 		"file_id": fileID,
-		"s3_key":  s3Key,
-	}).Info("Deleted file upload")
+		"s3_key":  file.S3Key,
+	}).Info("Deleted file ")
 
-	commons.WriteSuccessResponse(w, "File upload deleted", nil)
+	commons.WriteSuccessResponse(w, "File deleted", nil)
 }

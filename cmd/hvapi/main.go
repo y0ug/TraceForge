@@ -43,7 +43,15 @@ func main() {
 	logger.SetOutput(os.Stdout)
 	logger.SetLevel(logrus.InfoLevel)
 
-	configPath := "config.toml"
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config.toml"
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8081"
+	}
+
 	configLoader, err := hvlib.NewConfigLoader(configPath)
 	if err != nil {
 		logger.Fatalf("Error loading configuration: %v", err)
@@ -72,10 +80,10 @@ func main() {
 	router.Use(server.AuthMiddleware)
 
 	// Start the server
-	port := 8080
-	logger.Infof("Server listening on :%d", port)
+	listenOn := fmt.Sprintf(":%s", port)
+	logger.Infof("Server listening on %s", listenOn)
 	if err := http.ListenAndServe(
-		fmt.Sprintf(":%d", port), router); err != nil {
-		logrus.Fatal(err)
+		listenOn, router); err != nil {
+		logger.Fatal(err)
 	}
 }
