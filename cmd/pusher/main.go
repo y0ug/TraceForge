@@ -1,6 +1,7 @@
 package main
 
 import (
+	"TraceForge/internals/agent"
 	"TraceForge/internals/mq"
 	"encoding/json"
 	"flag"
@@ -10,12 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
-
-type Task struct {
-	TaskID    string      `json:"task_id"`
-	Operation string      `json:"operation"`
-	Data      interface{} `json:"data"`
-}
 
 func main() {
 	logger := logrus.New()
@@ -28,6 +23,7 @@ func main() {
 
 	serverURL := flag.String("url", "http://127.0.0.1:8888", "The URL of the queue")
 	agentUUID := flag.String("uuid", "", "The UUID of the agent")
+	plugin := flag.String("plugin", "example", "Plugin to call")
 
 	// Parse command-line arguments
 	flag.Parse()
@@ -38,9 +34,9 @@ func main() {
 
 	client := mq.NewClient(*serverURL)
 
-	task := Task{
-		TaskID:    uuid.NewString(),
-		Operation: "process",
+	task := agent.Task{
+		TaskID: uuid.NewString(),
+		Plugin: *plugin,
 		Data: map[string]string{
 			"msg": "test",
 		},

@@ -1,10 +1,10 @@
 package main
 
 import (
+	"TraceForge/internals/agent"
 	"TraceForge/internals/mq"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,12 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
-
-type Task struct {
-	TaskID    string      `json:"task_id"`
-	Operation string      `json:"operation"`
-	Data      interface{} `json:"data"`
-}
 
 func main() {
 	logger := logrus.New()
@@ -43,7 +37,10 @@ func main() {
 
 	client := mq.NewClient(*serverURL)
 
-	handleMessage(logger, client, *agentUUID)
+	pluginManager := agent.NewPluginManager()
+	pluginManager.RegisterPlugin("example", agent.NewExamplePlugin())
+
+	handleMessage(logger, client, *agentUUID, pluginManager)
 loop:
 	for {
 		select {
@@ -51,7 +48,7 @@ loop:
 			logger.Info("Exiting client.")
 			break loop
 		case <-timeout(4 * time.Second): // Timeout-driven loop
-			handleMessage(logger, client, *agentUUID)
+			handleMessage(logger, client, *agentUUID, pluginManager)
 		}
 	}
 }
@@ -69,7 +66,7 @@ func timeout(duration time.Duration) <-chan bool {
 }
 
 // handleMessage encapsulates the logic to pull and process messages
-func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string) {
+func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string, pluginManager *agent.PluginManager) {
 	msg, err := client.PullMessage(agentID)
 	if err != nil {
 		logger.WithError(err).Error("Failed to pull message")
@@ -80,13 +77,21 @@ func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string) {
 		logger.Info("No messages available")
 		return
 	}
-	var task Task
+	var task agent.Task
 	if err := json.Unmarshal([]byte(msg.Body), &task); err != nil {
 		logger.WithError(err).Error("failed to parse message body")
 	}
 
+	plugin, exists := pluginManager.GetPlugin(task.Plugin)
+	if !exists {
+		logger.WithField("plugin", task.Plugin).Error("No plugin found")
+		// We still delete the task if no plugin found
+	} else if err := plugin.Handle(task); err != nil {
+		logger.WithError(err).Error("failed to handle task")
+	}
+
 	// Process the task
-	fmt.Printf("Agent %s processing task: %+v\n", agentID, task)
+	logger.Printf("Agent %s processing task: %+v\n", agentID, task)
 	err = client.DeleteMessage(msg.ID)
 	if err != nil {
 		logger.WithError(err).Error("Failed to delete message")
