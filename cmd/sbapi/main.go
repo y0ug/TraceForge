@@ -1,6 +1,7 @@
 package main
 
 import (
+	"TraceForge/pkg/sblib/helpers"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -9,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hvapi/pkg/hvlib/utils"
 	"io"
 	"net/http"
 	"os"
@@ -24,7 +24,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/sirupsen/logrus"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -35,7 +34,7 @@ type HttpResp struct {
 }
 
 type Server struct {
-	*utils.Server
+	*helpers.Server
 	Config   Config
 	S3Client *s3.Client
 	DB       *sql.DB
@@ -88,10 +87,10 @@ func main() {
 		FullTimestamp: true,
 	})
 	logger.SetOutput(os.Stdout)
-	logger.SetLevel(logrus.InfoLevel)
+	logger.SetLevel(log.InfoLevel)
 
 	if err := godotenv.Load(); err != nil {
-		logrus.Warning("Error loading .env file")
+		log.Warning("Error loading .env file")
 	}
 
 	config := Config{
@@ -136,7 +135,7 @@ func main() {
 	}
 
 	server := &Server{
-		Server:   &utils.Server{Logger: logger},
+		Server:   &helpers.Server{Logger: logger},
 		Config:   config,
 		S3Client: s3Client,
 		DB:       db,
@@ -175,7 +174,7 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 		// Get Authorization header
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			logrus.Warn("No Authorization header")
+			log.Warn("No Authorization header")
 			writeErrorResponse(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -183,14 +182,14 @@ func (s *Server) AuthMiddleware(next http.Handler) http.Handler {
 		// Check Bearer token format
 		headerParts := strings.Split(authHeader, " ")
 		if len(headerParts) != 2 || headerParts[0] != "Bearer" {
-			logrus.Warn("Invalid Authorization header format")
+			log.Warn("Invalid Authorization header format")
 			writeErrorResponse(w, "Invalid Authorization header format", http.StatusUnauthorized)
 			return
 		}
 
 		// Validate token
 		if headerParts[1] != s.Config.AuthToken {
-			logrus.Warn("Invalid token")
+			log.Warn("Invalid token")
 			writeErrorResponse(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -231,7 +230,7 @@ func (s *Server) getFilesHandler(w http.ResponseWriter, r *http.Request) {
 			&upload.Sha1,
 			&upload.Sha256,
 		); err != nil {
-			logrus.WithError(err).Error("Failed to scan row")
+			log.WithError(err).Error("Failed to scan row")
 			continue
 		}
 
@@ -295,7 +294,7 @@ func (s *Server) getPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Log the file upload request
-	s.Logger.WithFields(logrus.Fields{
+	s.Logger.WithFields(log.Fields{
 		"file_id": fileID,
 		"s3_key":  s3Key,
 	}).Info("Generated presigned URL for file upload")
@@ -327,7 +326,7 @@ func (s *Server) finishUploadHandler(w http.ResponseWriter, r *http.Request) {
 	err := s.DB.QueryRow("SELECT s3_key FROM file_uploads WHERE id = ?", fileID).Scan(&s3Key)
 	if err != nil {
 		writeErrorResponse(w, "File id not found", http.StatusNotFound)
-		s.Logger.WithFields(logrus.Fields{
+		s.Logger.WithFields(log.Fields{
 			"file_id": fileID,
 			"s3_key":  s3Key,
 		}).Info("Not found in DB")
@@ -336,7 +335,7 @@ func (s *Server) finishUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	exist, err := fileExistsInS3(s, s3Key)
 	if err != nil {
-		s.Logger.WithFields(logrus.Fields{
+		s.Logger.WithFields(log.Fields{
 			"file_id": fileID,
 			"s3_key":  s3Key,
 		}).WithError(err).Error("Not found in DB")
@@ -344,7 +343,7 @@ func (s *Server) finishUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !exist {
-		s.Logger.WithFields(logrus.Fields{
+		s.Logger.WithFields(log.Fields{
 			"file_id": fileID,
 			"s3_key":  s3Key,
 		}).Info("Not found in S3")
@@ -371,7 +370,7 @@ func (s *Server) finishUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Logger.WithFields(logrus.Fields{
+	s.Logger.WithFields(log.Fields{
 		"file_id": fileID,
 	}).Info("user finish to upload")
 
@@ -411,7 +410,7 @@ func (s *Server) updateFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Logger.WithFields(logrus.Fields{
+	s.Logger.WithFields(log.Fields{
 		"file_id":  fileID,
 		"filename": params.Filename,
 	}).Info("Updated upload record")
@@ -449,7 +448,7 @@ func (s *Server) getFileHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.Logger.WithFields(logrus.Fields{"id": upload.ID}).Info("file info")
+	s.Logger.WithFields(log.Fields{"id": upload.ID}).Info("file info")
 	writeSuccessResponse(w, "", upload)
 }
 
@@ -497,7 +496,7 @@ func (s *Server) deleteFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Logger.WithFields(logrus.Fields{
+	s.Logger.WithFields(log.Fields{
 		"file_id": fileID,
 		"s3_key":  s3Key,
 	}).Info("Deleted file upload")
@@ -506,7 +505,7 @@ func (s *Server) deleteFileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startWorkerService() {
-	logger := logrus.New()
+	logger := log.New()
 	logger.Infof("Worker service started")
 
 	for {
@@ -536,7 +535,7 @@ func (s *Server) startWorkerService() {
 		// Process each file
 		for _, file := range files {
 			if err := s.processFile(file); err != nil {
-				logger.WithFields(logrus.Fields{
+				logger.WithFields(log.Fields{
 					"file_id": file.ID,
 					"s3_key":  file.S3Key,
 				}).WithError(err).Error("Failed to process file")
@@ -586,7 +585,7 @@ func (s *Server) processFile(file FileInfo) error {
 		return fmt.Errorf("failed to update upload record: %w", err)
 	}
 
-	logrus.WithFields(logrus.Fields{
+	log.WithFields(log.Fields{
 		"file_id": file.ID,
 		"s3_key":  file.S3Key,
 		"sha1":    hash1,
@@ -663,7 +662,7 @@ func (s *Server) deleteFileUpload(id uuid.UUID, s3Key string) {
 		return
 	}
 
-	s.Logger.WithFields(logrus.Fields{
+	s.Logger.WithFields(log.Fields{
 		"id":     id,
 		"s3_key": s3Key,
 	}).Info("Deleted expired file upload")

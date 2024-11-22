@@ -1,10 +1,10 @@
 package main
 
 import (
+	"TraceForge/pkg/hvlib"
+	"TraceForge/pkg/sblib/helpers"
 	"encoding/json"
 	"fmt"
-	"hvapi/pkg/hvlib"
-	"hvapi/pkg/sblib/helpers"
 	"log"
 	"net/http"
 	"os"
@@ -86,7 +86,7 @@ func main() {
 	}
 
 	server := &Server{
-		Server:    &utils.Server{Logger: logger},
+		Server:    &helpers.Server{Logger: logger},
 		AuthToken: authToken,
 	}
 
