@@ -87,6 +87,7 @@ func main() {
 	router.HandleFunc("/file/{file_id}", server.UpdateFileHandler).Methods("PUT")
 	router.HandleFunc("/file/{file_id}", server.DeleteFileHandler).Methods("DELETE")
 	router.HandleFunc("/file/{file_id}", server.GetFileHandler).Methods("GET")
+	router.HandleFunc("/file/{file_id}/dl", server.GetFileDlHandler).Methods("GET")
 
 	router.Use(server.LoggingMiddleware())
 	router.Use(server.AuthMiddleware)

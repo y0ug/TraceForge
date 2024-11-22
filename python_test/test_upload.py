@@ -51,6 +51,9 @@ def main(file_path):
         sys.exit(1)
 
     print("Upload completed successfully!")
+    resp = requests.get(f"{base_url}/file/{file_id}/dl", headers=headers)
+    data = resp.json()
+    print(data["data"])
 
 
 if __name__ == "__main__":

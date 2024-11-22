@@ -70,7 +70,7 @@ func (d *DB) GetFiles(ctx context.Context) ([]FileInfo, error) {
 func (d *DB) GetFile(ctx context.Context, fileID string) (*FileInfo, error) {
 	var file FileInfo
 	err := d.DB.QueryRowContext(ctx, `
-        SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_fileed ,sha1, sha256
+        SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_uploaded,sha1, sha256
         FROM file_uploads
         WHERE id = ?
     `, fileID).Scan(

@@ -191,6 +191,39 @@ func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {
 	commons.WriteSuccessResponse(w, "Upload record updated", nil)
 }
 
+func (s *Server) GetFileDlHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	vars := mux.Vars(r)
+	fileID := vars["file_id"]
+
+	file, err := s.DB.GetFile(ctx, fileID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			s.Logger.WithError(err).Warn("File not found")
+			commons.WriteErrorResponse(w, "File not found", http.StatusNotFound)
+		} else {
+			s.Logger.WithError(err).WithFields(log.Fields{"id": fileID}).Error("Failed to query file")
+			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+	s.Logger.WithFields(log.Fields{"id": fileID}).Info("file info")
+
+	presigner := s3.NewPresignClient(s.S3Client)
+	req := &s3.GetObjectInput{
+		Bucket: aws.String(s.Config.S3BucketName),
+		Key:    aws.String(file.S3Key),
+	}
+	presignedURL, err := presigner.PresignGetObject(ctx, req, func(opts *s3.PresignOptions) {
+		opts.Expires = 15 * time.Minute
+	})
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to generate presigned URL")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+	}
+	commons.WriteSuccessResponse(w, "", presignedURL)
+}
+
 func (s *Server) GetFileHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)

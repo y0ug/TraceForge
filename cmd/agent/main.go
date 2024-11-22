@@ -38,7 +38,29 @@ func main() {
 	client := mq.NewClient(*serverURL)
 
 	pluginManager := agent.NewPluginManager()
-	pluginManager.RegisterPlugin("example", agent.NewExamplePlugin())
+
+	pluginFactories := map[string]func() (agent.Plugin, error){
+		"example": func() (agent.Plugin, error) {
+			return agent.NewExamplePlugin()
+		},
+		"exec": func() (agent.Plugin, error) {
+			return agent.NewExecPlugin()
+		},
+		"dlexec": func() (agent.Plugin, error) {
+			return agent.NewDlExecPlugin()
+		},
+	}
+
+	for name, factory := range pluginFactories {
+		pluginManager.RegisterPluginFactory(name, factory)
+	}
+
+	// List of plugin names to load
+	pluginNames := []string{"example", "exec", "dlexec"}
+
+	if err := pluginManager.LoadPlugins(pluginNames); err != nil {
+		logger.WithError(err).Fatal("Failed to load plugins")
+	}
 
 	handleMessage(logger, client, *agentUUID, pluginManager)
 loop:
@@ -86,8 +108,19 @@ func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string, plu
 	if !exists {
 		logger.WithField("plugin", task.Plugin).Error("No plugin found")
 		// We still delete the task if no plugin found
-	} else if err := plugin.Handle(task); err != nil {
-		logger.WithError(err).Error("failed to handle task")
+	} else {
+		resp, err := plugin.Handle(task)
+		if err != nil {
+			logger.WithError(err).Error("failed to handle task")
+		}
+		if resp != nil {
+			value, err := json.Marshal(resp)
+			if err != nil {
+				logger.WithError(err).Error("failed to marshal response")
+				return
+			}
+			client.PushMessage(task.TaskID, string(value))
+		}
 	}
 
 	// Process the task
