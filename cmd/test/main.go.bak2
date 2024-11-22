@@ -1,0 +1,555 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pelletier/go-toml"
+)
+
+type VMStatus struct {
+	ID    string
+	Name  string
+	State string
+}
+
+type Snapshot struct {
+	ID           string
+	Name         string
+	CreationTime time.Time
+}
+
+type ConfigLoader struct {
+	config *toml.Tree
+}
+
+// NewConfigLoader initializes a ConfigLoader with a given file.
+func NewConfigLoader(configPath string) (*ConfigLoader, error) {
+	file, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	tree, err := toml.LoadBytes(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return &ConfigLoader{config: tree}, nil
+}
+
+// Get retrieves a value from the configuration.
+func (c *ConfigLoader) Get(key string) interface{} {
+	return c.config.Get(key)
+}
+
+// GetString retrieves a string value from the configuration.
+func (c *ConfigLoader) GetString(key string) string {
+	if value, ok := c.config.Get(key).(string); ok {
+		return value
+	}
+	return ""
+}
+
+// GetSubTree retrieves a subtree (e.g., for specific VM configurations).
+func (c *ConfigLoader) GetSubTree(key string) *toml.Tree {
+	return c.config.Get(key).(*toml.Tree)
+}
+
+// VirtualizationProvider interface
+type VirtualizationProvider interface {
+	LoadVMs(config *toml.Tree) error
+	List() ([]VMStatus, error)
+	ListSnapshots(vmName string) ([]Snapshot, error)
+	TakeSnapshot(vmName, snapshotName string) error
+	RestoreSnapshot(vmName, snapshotName string) error
+	Start(vmName string) error
+	Stop(vmName string, force bool) error
+	Suspend(vmName string) error
+	Reset(vmName string) error
+	Revert(vmName string) error
+}
+
+// VP struct for storing common fields
+type VP struct {
+	VMs map[string]VM
+}
+
+// VM struct for storing VM details
+type VM struct {
+	ID   string
+	Path string
+}
+
+// VmwareVP struct
+type VmwareVP struct {
+	VP
+	InstallPath string
+}
+
+// HypervVP struct
+type HypervVP struct {
+	VP
+}
+
+func (v *VP) LoadVMs(loader *ConfigLoader, provider string) error {
+	v.VMs = make(map[string]VM)
+
+	vmNodes := loader.GetSubTree(provider + ".vm")
+	if vmNodes != nil {
+		for key, node := range vmNodes.ToMap() {
+			vmTree := node.(map[string]interface{})
+			vm := VM{
+				ID: vmTree["id"].(string),
+			}
+			if path, ok := vmTree["path"]; ok {
+				vm.Path = path.(string)
+			}
+			v.VMs[key] = vm
+		}
+	}
+	return nil
+}
+
+// LoadVMs for VmwareVP
+func (v *VmwareVP) LoadVMs(loader *ConfigLoader) error {
+	v.InstallPath = loader.GetString("vmware.install_path")
+	return v.VP.LoadVMs(loader, "vmware")
+}
+
+// LoadVMs for HypervVP
+func (h *HypervVP) LoadVMs(loader *ConfigLoader) error {
+	return h.VP.LoadVMs(loader, "hyperv")
+}
+
+func (v *VmwareVP) List() ([]VMStatus, error) {
+	output, err := v.ExecVmrun("list")
+	if err != nil {
+		return nil, fmt.Errorf("%s (%v)", output, err)
+	}
+	// Parse the output of vmrun list
+	lines := strings.Split(string(output), "\n")
+	runningVMs := make(map[string]bool)
+	for _, line := range lines[1:] { // Skip the first line: "Total running VMs: X"
+		line = strings.TrimSpace(line)
+		if line != "" {
+			runningVMs[line] = true
+		}
+	}
+
+	// Check registered VMs and determine their states
+	var vms []VMStatus
+	for vmName, vm := range v.VMs {
+		state := "stopped" // Default state
+		if runningVMs[vm.Path] {
+			state = "running"
+		} else {
+			// If not running, check the checkpoint.vmState in the .vmx file
+			vmxContent, err := os.ReadFile(vm.Path)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read .vmx file for VM %s: %v", vmName, err)
+			}
+
+			vmxLines := strings.Split(string(vmxContent), "\n")
+			for _, vmxLine := range vmxLines {
+				if strings.HasPrefix(vmxLine, "checkpoint.vmState") {
+					// Parse the vmState value
+					parts := strings.SplitN(vmxLine, "=", 2)
+					if len(parts) == 2 {
+						vmState := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+						if vmState != "" {
+							state = "suspended"
+						}
+					}
+					break
+				}
+			}
+		}
+
+		// Append VM details
+		vms = append(vms, VMStatus{
+			ID:    vm.ID,
+			Name:  vmName,
+			State: state,
+		})
+	}
+
+	return vms, nil
+}
+
+func (v *VmwareVP) ListSnapshots(vmName string) ([]Snapshot, error) {
+	return v.listSnapshots(vmName, "listSnapshots")
+}
+
+// listSnapshots is a helper function for listing snapshots (common for VMware)
+func (v *VmwareVP) listSnapshots(vmName, command string) ([]Snapshot, error) {
+	vm, exists := v.VMs[vmName]
+	if !exists {
+		return nil, nil // VM not found
+	}
+
+	output, err := v.ExecVmrun(command, vm.Path)
+	if err != nil {
+		return nil, fmt.Errorf("%s (%v)", output, err)
+	}
+
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		return nil, nil // No snapshots
+	}
+
+	var snapshots []Snapshot
+	for _, line := range lines[1:] { // Skip the first line (total count)
+		name := strings.TrimSpace(line)
+		if name != "" {
+			snapshots = append(snapshots, Snapshot{Name: name})
+		}
+	}
+	return snapshots, nil
+}
+
+func (v *VmwareVP) Start(vmName string) error {
+	return v.execVmCommand(vmName, "start")
+}
+
+func (v *VmwareVP) Stop(vmName string, force bool) error {
+	forceCmd := map[bool]string{true: "hard", false: "soft"}[force]
+	return v.execVmCommand(vmName, "stop", forceCmd)
+}
+
+func (v *VmwareVP) Suspend(vmName string) error {
+	return v.execVmCommand(vmName, "suspend")
+}
+
+func (v *VmwareVP) Reset(vmName string) error {
+	return v.execVmCommand(vmName, "reset")
+}
+
+// execVmCommand is a helper function for executing vmrun commands (common for VMware)
+func (v *VmwareVP) execVmCommand(vmName, command string, extraArgs ...string) error {
+	vm, exists := v.VMs[vmName]
+	if !exists {
+		return fmt.Errorf("VM %s not found in configuration", vmName)
+	}
+
+	args := append([]string{command, vm.Path}, extraArgs...)
+	output, err := v.ExecVmrun(args...)
+	if err != nil {
+		return fmt.Errorf("%s (%v)", output, err)
+	}
+	return nil
+}
+
+func (v *VmwareVP) ExecVmrun(args ...string) (string, error) {
+	vmrunPath := filepath.Join(v.InstallPath, "vmrun.exe")
+	cmd := exec.Command(vmrunPath,
+		append([]string{"-T", "ws"}, args...)...)
+
+	stdOutBuf, stdErrBuf := new(strings.Builder), new(strings.Builder)
+	cmd.Stdout = stdOutBuf
+	cmd.Stderr = stdErrBuf
+
+	err := cmd.Run()
+	// strStdout := stdOutBuf.String()
+	strStdout := strings.TrimSuffix(stdOutBuf.String(), "\r\n")
+	if err != nil {
+		if exiterr, ok := err.(*exec.ExitError); ok {
+			// Error are in stdout not stderr
+			return strStdout, fmt.Errorf("exit status: %08x", exiterr.ExitCode())
+		} else {
+			return "", fmt.Errorf("cmd.Wait %v", err)
+		}
+	}
+
+	return strStdout, nil
+}
+
+func (v *VmwareVP) TakeSnapshot(vmName, snapshotName string) error {
+	return v.execVmCommand(vmName, "snapshot", snapshotName)
+}
+
+func (v *VmwareVP) RestoreSnapshot(vmName, snapshotName string) error {
+	return v.execVmCommand(vmName, "revertToSnapshot", snapshotName)
+}
+
+func (v *VmwareVP) Revert(vmName string) error {
+	snapshots, err := v.ListSnapshots(vmName)
+	if err != nil {
+		return err
+	}
+	snapshotName := snapshots[len(snapshots)-1].Name
+	return v.execVmCommand(vmName, "revertToSnapshot", snapshotName)
+}
+
+func (h *HypervVP) List() ([]VMStatus, error) {
+	return h.listVMs("Get-VM | Select-Object Id,Name,State | ConvertTo-Json")
+}
+
+// listVMs is a helper function for listing VMs (common for Hyper-V)
+func (h *HypervVP) listVMs(command string) ([]VMStatus, error) {
+	cmd := exec.Command("powershell", "-Command", command)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse JSON output
+	var vms []struct {
+		ID    string `json:"Id"`
+		Name  string `json:"Name"`
+		State int    `json:"State"`
+	}
+	if err := json.Unmarshal(output, &vms); err != nil {
+		return nil, err
+	}
+
+	// Map state codes to human-readable states
+	stateMap := map[int]string{
+		2: "running",
+		3: "stopped",
+		6: "saved",
+		9: "suspended",
+	}
+
+	// Match with the config
+	var results []VMStatus
+	for _, vm := range vms {
+		if _, exists := h.VMs[vm.Name]; exists {
+			results = append(results, VMStatus{
+				ID:    vm.ID,
+				Name:  vm.Name,
+				State: stateMap[vm.State],
+			})
+		}
+	}
+	return results, nil
+}
+
+func (h *HypervVP) ListSnapshots(vmName string) ([]Snapshot, error) {
+	cmd := exec.Command("powershell",
+		"-Command",
+		fmt.Sprintf("Get-VMSnapshot -VMName \"%s\" | Select-Object Id, Name, CreationTime | ConvertTo-Json", vmName))
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	// Parse JSON output
+	var snapshots []struct {
+		ID           string `json:"Id"`
+		Name         string `json:"Name"`
+		CreationTime string `json:"CreationTime"`
+	}
+	if err := json.Unmarshal(output, &snapshots); err != nil {
+		return nil, err
+	}
+
+	// Convert to Snapshot struct
+	var results []Snapshot
+	for _, snap := range snapshots {
+		creationTime, err := parseMicrosoftDate(snap.CreationTime)
+		if err != nil {
+			fmt.Printf("Error parsing date: %v\n", err)
+			continue
+		}
+		results = append(results, Snapshot{
+			ID:           snap.ID,
+			Name:         snap.Name,
+			CreationTime: creationTime,
+		})
+	}
+	return results, nil
+}
+
+func (h *HypervVP) Start(vmName string) error {
+	return h.execVmCommand(vmName, "Start-VM")
+}
+
+func (h *HypervVP) Stop(vmName string, force bool) error {
+	forceCmd := map[bool]string{true: "-TurnOff", false: ""}[force]
+	return h.execVmCommand(vmName, fmt.Sprintf("Stop-VM %s", forceCmd))
+}
+
+func (h *HypervVP) Suspend(vmName string) error {
+	return h.execVmCommand(vmName, "Suspend-VM")
+}
+
+func (h *HypervVP) Reset(vmName string) error {
+	return h.execVmCommand(vmName, "Reboot-VM")
+}
+
+func (h *HypervVP) TakeSnapshot(vmName, snapshotName string) error {
+	snapshots, err := h.ListSnapshots(vmName)
+	if err != nil {
+		return err
+	}
+	for _, s := range snapshots {
+		if s.Name == snapshotName {
+			return fmt.Errorf("A snapshot with the name already exists")
+		}
+	}
+
+	return h.execVmCommand(vmName,
+		fmt.Sprintf("Checkpoint-VM -SnapshotName %s", snapshotName))
+}
+
+func (h *HypervVP) RestoreSnapshot(vmName, snapshotName string) error {
+	return h.execVmCommand(vmName,
+		fmt.Sprintf("Restore-VMSnapshot -Name %s -Confirm:$false", snapshotName))
+}
+
+func (h *HypervVP) Revert(vmName string) error {
+	_, exists := h.VMs[vmName]
+	if !exists {
+		return fmt.Errorf("VM %s not found in configuration", vmName)
+	}
+
+	cmd := exec.Command("powershell",
+		"-Command",
+		fmt.Sprintf("Get-VM -VMName %s | Get-VMSnapshot | Sort CreationTime | Select -Last 1 | Restore-VMSnapshot -Confirm:$false", vmName))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to execute command on VM %s: %v, output: %s", vmName, err, string(output))
+	}
+	return nil
+}
+
+// execVmCommand is a helper function for executing Hyper-V commands
+func (h *HypervVP) execVmCommand(vmName, command string) error {
+	_, exists := h.VMs[vmName]
+	if !exists {
+		return fmt.Errorf("VM %s not found in configuration", vmName)
+	}
+
+	cmd := exec.Command("powershell",
+		"-Command",
+		fmt.Sprintf("%s -VMName %s", command, vmName))
+	output, err := cmd.CombinedOutput()
+	println(string(output))
+	if err != nil {
+		return fmt.Errorf("failed to execute command on VM %s: %v, output: %s", vmName, err, string(output))
+	}
+	return nil
+}
+
+func parseMicrosoftDate(msDate string) (time.Time, error) {
+	// Use a regex to extract the numeric timestamp
+	re := regexp.MustCompile(`/Date\((\d+)\)/`)
+	matches := re.FindStringSubmatch(msDate)
+	if len(matches) < 2 {
+		return time.Time{}, fmt.Errorf("invalid Microsoft date format: %s", msDate)
+	}
+
+	// Convert the timestamp to an integer
+	msTimestamp, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	// Convert milliseconds to seconds and parse the Unix time
+	return time.UnixMilli(msTimestamp), nil
+}
+
+func manageVM(provider VirtualizationProvider, vmName string) {
+	err := provider.Start(vmName)
+	if err != nil {
+		fmt.Printf("Error starting VM %s: %v\n", vmName, err)
+		return
+	}
+	fmt.Printf("VM %s started successfully.\n", vmName)
+
+	vms, _ := provider.List()
+	for _, vm := range vms {
+		if vm.Name == vmName && vm.State == "running" {
+			fmt.Printf("VM %s is running.\n", vmName)
+		}
+	}
+	time.Sleep(3 * time.Second)
+	err = provider.Suspend(vmName)
+	if err != nil {
+		fmt.Printf("Error stopping VM %s: %v\n", vmName, err)
+		return
+	}
+	fmt.Printf("VM %s stopped successfully.\n", vmName)
+
+	vms, _ = provider.List()
+	for _, vm := range vms {
+		if vm.Name == vmName {
+			fmt.Printf("VM %s is %s.\n", vmName, vm.State)
+		}
+	}
+	time.Sleep(3 * time.Second)
+}
+
+func snapVM(provider VirtualizationProvider, vmName string) {
+	err := provider.TakeSnapshot(vmName, "test1")
+	if err != nil {
+		fmt.Printf("%s\n", err)
+	}
+	time.Sleep(3 * time.Second)
+	provider.RestoreSnapshot(vmName, "test1")
+}
+
+// Main function
+func main() {
+	configPath := "config.toml" // Replace with actual path
+	configLoader, err := NewConfigLoader(configPath)
+	if err != nil {
+		log.Fatalf("Error loading configuration: %v", err)
+	}
+
+	// Create instances of the providers
+	vmware := &VmwareVP{}
+	hyperv := &HypervVP{}
+
+	// Load data into the providers
+	if err := vmware.LoadVMs(configLoader); err != nil {
+		log.Fatalf("Error loading VMware VMs: %v", err)
+	}
+	if err := hyperv.LoadVMs(configLoader); err != nil {
+		log.Fatalf("Error loading Hyper-V VMs: %v", err)
+	}
+
+	// Print results
+	fmt.Printf("VmwareVP: %+v\n", vmware)
+	fmt.Printf("HypervVP: %+v\n", hyperv)
+
+	vmwareVMs, _ := vmware.List()
+	hypervVMs, _ := hyperv.List()
+
+	fmt.Println("VMware VMs:", vmwareVMs)
+	fmt.Println("Hyper-V VMs:", hypervVMs)
+
+	// snapVM(vmware, "lab-win10-anti")
+	//snapVM(hyperv, "sandbox-win10-001")
+	//
+	// // VMware Snapshots
+	// vmwareSnapshots, _ := vmware.ListSnapshots("lab-win10-anti")
+	// for _, snap := range vmwareSnapshots {
+	// 	fmt.Printf("VMware Snapshot: %+v\n", snap)
+	// }
+	//
+	// Hyper-V Snapshots
+	hypervSnapshots, _ := hyperv.ListSnapshots("sandbox-win10-001")
+	for _, snap := range hypervSnapshots {
+		fmt.Printf("Hyper-V Snapshot: %+v\n", snap)
+	}
+
+	// hyperv.Revert("sandbox-win10-001")
+	vmware.Revert("lab-win10-anti")
+
+	err = hyperv.execVmCommand("sandbox-win10-001", "dd")
+	if err != nil {
+		fmt.Printf("%v", err)
+	}
+	// manageVM(vmware, "lab-win10-anti")
+	// manageVM(hyperv, "sandbox-win10-001")
+	//
+}
