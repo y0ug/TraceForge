@@ -1,6 +1,7 @@
-package helpers
+package commons
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -14,7 +15,7 @@ type Server struct {
 	Logger *logrus.Logger
 }
 
-func (s *Server) RequestLoggingMiddleware() mux.MiddlewareFunc {
+func (s *Server) LoggingMiddleware() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Start timer
@@ -49,4 +50,23 @@ func getClientIP(r *http.Request) string {
 	// Fallback to RemoteAddr if X-Forwarded-For is not set
 	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
 	return clientIP
+}
+
+func WriteJSONResponse(w http.ResponseWriter, httpStatus int, data HttpResp) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+
+	json.NewEncoder(w).Encode(data)
+}
+
+func WriteSuccessResponse(w http.ResponseWriter, message string, data interface{}) {
+	WriteJSONResponse(w,
+		http.StatusOK,
+		HttpResp{Status: "success", Data: data, Message: message})
+}
+
+func WriteErrorResponse(w http.ResponseWriter, message string, httpStatus int) {
+	WriteJSONResponse(w,
+		httpStatus,
+		HttpResp{Status: "error", Data: nil, Message: message})
 }
