@@ -23,7 +23,7 @@ func (s *Server) HasherTask() {
 		rows, err := s.DB.DB.Query(`
             SELECT id, s3_key
             FROM file_uploads
-            WHERE sha256 == "" AND is_uploaded IS true
+            WHERE sha256 = '' AND is_uploaded = true
         `)
 		if err != nil {
 			s.Logger.WithError(err).Error("Failed to query uploads needing hash calculation")
@@ -83,8 +83,8 @@ func (s *Server) processFile(file FileInfo) error {
 	// Update the database with the hash
 	stmt, err := s.DB.DB.Prepare(`
         UPDATE file_uploads
-        SET sha1= ?, sha256 = ?
-        WHERE id = ?
+        SET sha1= $1, sha256 = $2 
+        WHERE id = $3 
     `)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -115,7 +115,7 @@ func (s *Server) CleanupTask() {
 func (s *Server) cleanupExpiredEntries() {
 	rows, err := s.DB.DB.Query(`
         SELECT id, s3_key FROM file_uploads
-        WHERE expires_at <= datetime('now') AND is_uploaded IS false 
+        WHERE expires_at <=  CURRENT_TIMESTAMP AND is_uploaded = false 
     `)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to query expired entries")
@@ -150,7 +150,7 @@ func (s *Server) deleteFileUpload(id uuid.UUID, s3Key string) {
 		return
 	}
 
-	_, err = tx.Exec("DELETE FROM file_uploads WHERE id = ?", id)
+	_, err = tx.Exec("DELETE FROM file_uploads WHERE id = $1", id)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to delete record")
 		tx.Rollback()

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 )
 
@@ -102,6 +103,33 @@ func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string, plu
 	var task agent.Task
 	if err := json.Unmarshal([]byte(msg.Body), &task); err != nil {
 		logger.WithError(err).Error("failed to parse message body")
+		return
+	}
+
+	// Connect to WebSocket if WebSocketURL is provided
+	var wsConn *websocket.Conn
+	var sendStatusUpdate func(string)
+
+	if task.WebSocketURL != "" {
+		websocketURL := task.WebSocketURL + "?task_id=" + task.TaskID + "&role=agent"
+		dialer := websocket.DefaultDialer
+		wsConn, _, err = dialer.Dial(websocketURL, nil)
+		if err != nil {
+			logger.WithError(err).Error("Failed to connect to websocket")
+			// Define sendStatusUpdate as no-op
+			sendStatusUpdate = func(status string) {}
+		} else {
+			defer wsConn.Close()
+			sendStatusUpdate = func(status string) {
+				err := wsConn.WriteMessage(websocket.TextMessage, []byte(status))
+				if err != nil {
+					logger.WithError(err).Error("Failed to send status update")
+				}
+			}
+		}
+	} else {
+		// Define sendStatusUpdate as no-op
+		sendStatusUpdate = func(status string) {}
 	}
 
 	plugin, exists := pluginManager.GetPlugin(task.Plugin)
@@ -109,7 +137,7 @@ func handleMessage(logger *logrus.Logger, client *mq.Client, agentID string, plu
 		logger.WithField("plugin", task.Plugin).Error("No plugin found")
 		// We still delete the task if no plugin found
 	} else {
-		resp, err := plugin.Handle(task)
+		resp, err := plugin.Handle(task, sendStatusUpdate)
 		if err != nil {
 			logger.WithError(err).Error("failed to handle task")
 		}

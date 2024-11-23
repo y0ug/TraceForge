@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -31,9 +31,9 @@ func main() {
 		log.Warning("Error loading .env file")
 	}
 
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "./api.db"
+	dbConnStr := os.Getenv("DB_URI")
+	if dbConnStr == "" {
+		logger.Fatal("DB_URI environment variable is required")
 	}
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -58,7 +58,7 @@ func main() {
 	})
 
 	// Initialize SQLite database
-	db, err := sbapi.NewDb(dbPath)
+	db, err := sbapi.NewDb(dbConnStr)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed NewDB")
 	}

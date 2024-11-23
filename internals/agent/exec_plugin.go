@@ -27,19 +27,24 @@ func (p *ExecPlugin) Name() string {
 	return "exec"
 }
 
-func (p *ExecPlugin) Handle(task Task) (interface{}, error) {
+func (p *ExecPlugin) Handle(task Task, sendStatusUpdate func(string)) (interface{}, error) {
 	var args ExecPluginArgs
 	if err := json.Unmarshal(task.Data, &args); err != nil {
-		// return nil, fmt.Errorf("Failed to parse args: %w", err)
+		sendStatusUpdate(fmt.Sprintf("Failed to parse args: %v", err))
 		return &ExecPluginResponse{
 			Status:  "error",
-			Message: fmt.Sprint("Failed to parse args: %w", err),
+			Message: fmt.Sprintf("Failed to parse args: %v", err),
 			Output:  "",
 		}, fmt.Errorf("Failed to parse args: %w", err)
 	}
 
-	fmt.Printf("ExecPlugin: %+v\n", task)
+	sendStatusUpdate(fmt.Sprintf("Executing command: %s %v", args.Name, args.Args))
 	output, err := p.execCommand(&args)
+	if err != nil {
+		sendStatusUpdate(fmt.Sprintf("Command execution failed: %v", err))
+	} else {
+		sendStatusUpdate("Command execution succeeded: \n" + string(output))
+	}
 
 	response := &ExecPluginResponse{
 		Status:  "success",

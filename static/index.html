@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Task Status</title>
+</head>
+<body>
+    <h1>Task Status</h1>
+    <div id="status"></div>
+    <script>
+        (function(){
+            // Get the task_id from the URL query parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const taskID = urlParams.get('task_id');
+            if (!taskID) {
+                document.getElementById('status').innerText = 'No task_id specified in the URL';
+                return;
+            }
+            // Construct the WebSocket URL
+            const wsURL = 'ws://' + window.location.host + '/ws?task_id=' + taskID + '&role=client';
+
+            const ws = new WebSocket(wsURL);
+            ws.onopen = function() {
+                console.log('WebSocket connected');
+            };
+            ws.onmessage = function(event) {
+                const statusDiv = document.getElementById('status');
+                const msg = document.createElement('div');
+                msg.textContent = event.data;
+                statusDiv.appendChild(msg);
+            };
+            ws.onclose = function() {
+                console.log('WebSocket disconnected');
+            };
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+        })();
+    </script>
+</body>
+</html>

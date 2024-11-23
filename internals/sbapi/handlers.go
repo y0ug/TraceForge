@@ -29,6 +29,7 @@ func (s *Server) GetFilesHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) {
 	// Generate UUID for the file
 	fileID := uuid.New().String()
+	ctx := r.Context()
 
 	// Create S3 key - you might want to organize files in folders
 	s3Key := fmt.Sprintf("uploads/%s.bin", fileID)
@@ -43,11 +44,12 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 		ContentType: aws.String("application/octet-stream"),
 	}
 
-	expiresIn := 15 * 60
-	stmt, err := s.DB.DB.Prepare(fmt.Sprintf(`
-        INSERT INTO file_uploads (id, s3_key, created_at, expires_at, updated_at, is_uploaded)
-        VALUES (?, ?, datetime('now'), datetime('now', '+%d seconds'), datetime('now'), false)
-    `, expiresIn))
+	expiresIn := time.Minute * 15
+	expiresAt := time.Now().Add(expiresIn)
+	stmt, err := s.DB.DB.PrepareContext(ctx, `
+    INSERT INTO file_uploads (id, s3_key, created_at, expires_at, updated_at, is_uploaded)
+    VALUES ($1, $2, CURRENT_TIMESTAMP, $3, CURRENT_TIMESTAMP, false)
+`)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to prepare statement")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -55,7 +57,7 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(fileID, s3Key)
+	_, err = stmt.Exec(fileID, s3Key, expiresAt)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to insert upload record")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -65,7 +67,7 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	// Generate presigned URL
 	presignedReq, err := presignClient.PresignPutObject(context.Background(),
 		putObjectInput,
-		s3.WithPresignExpires(time.Minute*15)) // URL expires in 15 minutes
+		s3.WithPresignExpires(expiresIn)) // URL expires in 15 minutes
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to generate presigned URL")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -95,7 +97,7 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 	fileID := vars["file_id"]
 
 	var s3Key string
-	err := s.DB.DB.QueryRowContext(ctx, "SELECT s3_key FROM file_uploads WHERE id = ?", fileID).Scan(&s3Key)
+	file, err := s.DB.GetFile(ctx, fileID)
 	if err != nil {
 		commons.WriteErrorResponse(w, "File id not found", http.StatusNotFound)
 		s.Logger.WithFields(log.Fields{
@@ -105,11 +107,11 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exist, err := s.fileExistsInS3(s3Key)
+	exist, err := s.fileExistsInS3(file.S3Key)
 	if err != nil {
 		s.Logger.WithFields(log.Fields{
 			"file_id": fileID,
-			"s3_key":  s3Key,
+			"s3_key":  file.S3Key,
 		}).WithError(err).Error("Not found in DB")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -117,17 +119,17 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if !exist {
 		s.Logger.WithFields(log.Fields{
 			"file_id": fileID,
-			"s3_key":  s3Key,
+			"s3_key":  file.S3Key,
 		}).Info("Not found in S3")
 		commons.WriteErrorResponse(w, "File not found in the bucket", http.StatusNotFound)
 		return
 	}
 
 	stmt, err := s.DB.DB.PrepareContext(ctx, `
-        UPDATE file_uploads
-        SET is_uploaded = true,updated_at = datetime('now')
-        WHERE id = ?
-    `)
+    UPDATE file_uploads
+    SET is_uploaded = true, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+`)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to prepare statement")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -165,10 +167,10 @@ func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stmt, err := s.DB.DB.PrepareContext(ctx, `
-        UPDATE file_uploads
-        SET filename = ?, updated_at = datetime('now')
-        WHERE id = ?
-    `)
+    UPDATE file_uploads
+    SET is_uploaded = true, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+`)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to prepare statement")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -195,6 +197,7 @@ func (s *Server) GetFileDlHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)
 	fileID := vars["file_id"]
+	expiresIn := 15 * time.Minute
 
 	file, err := s.DB.GetFile(ctx, fileID)
 	if err != nil {
@@ -215,7 +218,7 @@ func (s *Server) GetFileDlHandler(w http.ResponseWriter, r *http.Request) {
 		Key:    aws.String(file.S3Key),
 	}
 	presignedURL, err := presigner.PresignGetObject(ctx, req, func(opts *s3.PresignOptions) {
-		opts.Expires = 15 * time.Minute
+		opts.Expires = expiresIn
 	})
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to generate presigned URL")

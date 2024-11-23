@@ -32,10 +32,10 @@ func (p *DlExecPlugin) Name() string {
 	return "dlexec"
 }
 
-func (p *DlExecPlugin) Handle(task Task) (interface{}, error) {
+func (p *DlExecPlugin) Handle(task Task, sendStatusUpdate func(string)) (interface{}, error) {
 	var args DlExecPluginArgs
 	if err := json.Unmarshal(task.Data, &args); err != nil {
-		// return nil, fmt.Errorf("Failed to parse args: %w", err)
+		sendStatusUpdate(fmt.Sprintf("Failed to parse args: %v", err))
 		return &DlExecPluginResponse{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to parse args: %v", err),
@@ -44,23 +44,24 @@ func (p *DlExecPlugin) Handle(task Task) (interface{}, error) {
 	}
 
 	filename := fmt.Sprintf("%s.%s", task.TaskID, args.Ext)
+	sendStatusUpdate("Downloading file...")
 	filePath, err := downloadFileToTemp(args.URL, filename)
 	if err != nil {
+		sendStatusUpdate(fmt.Sprintf("Failed to download file: %v", err))
 		return &DlExecPluginResponse{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to download file: %v", err),
 			Output:  "",
 		}, fmt.Errorf("Failed to download file: %w", err)
 	}
-	// @TODO keep it for now
 	defer os.Remove(filePath)
 
 	err = os.Chmod(filePath, 0755)
 	if err != nil {
-		fmt.Printf("Failed to change file permissions: %v\n", err)
+		sendStatusUpdate(fmt.Sprintf("Failed to change file permissions: %v", err))
 	}
 
-	fmt.Printf("DlExecPlugin: %+v\n", task)
+	sendStatusUpdate("Executing downloaded file...")
 	output, err := p.execCommand(filePath, args.Args)
 
 	response := &DlExecPluginResponse{
@@ -70,10 +71,12 @@ func (p *DlExecPlugin) Handle(task Task) (interface{}, error) {
 	}
 
 	if err != nil {
+		sendStatusUpdate(fmt.Sprintf("Execution failed: %v", err))
 		response.Status = "error"
 		response.Message = fmt.Sprintf("%v", err)
 		return response, fmt.Errorf("Failed to execute %v", err)
 	}
+	sendStatusUpdate("Execution succeeded")
 	return response, nil
 }
 

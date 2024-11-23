@@ -8,30 +8,29 @@ import (
 )
 
 // Calling db.Close() should be deferred by the caller
-func NewDb(dbPath string) (*DB, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+func NewDb(connStr string) (*DB, error) {
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, err
 	}
-
-	// logger.Fatalf("Failed to connect to SQLite: %v", err)
 	return &DB{DB: db}, nil
 }
 
 func (d *DB) CreateTables() error {
 	// Create messages table
-	_, err := d.DB.Exec(
-		`CREATE TABLE IF NOT EXISTS file_uploads (
+	_, err := d.DB.Exec(`
+    CREATE TABLE IF NOT EXISTS file_uploads (
         id UUID PRIMARY KEY,
         s3_key TEXT,
-        filename TEXT DEFAULT "",
-        created_at DATETIME ,
-        expires_at DATETIME ,
-        updated_at DATETIME ,
+        filename TEXT DEFAULT '',
+        created_at TIMESTAMP,
+        expires_at TIMESTAMP,
+        updated_at TIMESTAMP,
         is_uploaded BOOLEAN,
-        sha1 TEXT DEFAULT "",
-        sha256 TEXT DEFAULT ""
-    );`)
+        sha1 TEXT DEFAULT '',
+        sha256 TEXT DEFAULT ''
+    );
+  `)
 	return err
 }
 
@@ -72,7 +71,7 @@ func (d *DB) GetFile(ctx context.Context, fileID string) (*FileInfo, error) {
 	err := d.DB.QueryRowContext(ctx, `
         SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_uploaded,sha1, sha256
         FROM file_uploads
-        WHERE id = ?
+        WHERE id = $1 
     `, fileID).Scan(
 		&file.ID,
 		&file.Filename,
@@ -92,6 +91,6 @@ func (d *DB) GetFile(ctx context.Context, fileID string) (*FileInfo, error) {
 }
 
 func (d *DB) DeleteFile(ctx context.Context, fileID string) error {
-	_, err := d.DB.ExecContext(ctx, "DELETE FROM file_uploads WHERE id = ?", fileID)
+	_, err := d.DB.ExecContext(ctx, "DELETE FROM file_uploads WHERE id = $1", fileID)
 	return err
 }
