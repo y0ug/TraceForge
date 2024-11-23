@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -40,6 +41,16 @@ func main() {
 		port = "8081"
 	}
 
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		logger.Fatal("REDIS_URL environment variable is required")
+	}
+	opt, err := redis.ParseURL(redisURL)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to parse REDIS_URL")
+	}
+
+	redisClient := redis.NewClient(opt)
 	config := sbapi.Config{
 		AuthToken:      commons.GetEnv("AUTH_TOKEN"),
 		HvApiAuthToken: commons.GetEnv("HV_API_AUTH_TOKEN"),
@@ -70,10 +81,11 @@ func main() {
 	}
 
 	server := &sbapi.Server{
-		Server:   &commons.Server{Logger: logger},
-		Config:   config,
-		S3Client: s3Client,
-		DB:       db,
+		Server:      &commons.Server{Logger: logger},
+		Config:      config,
+		S3Client:    s3Client,
+		DB:          db,
+		RedisClient: redisClient,
 	}
 
 	// Create a new router
@@ -92,8 +104,8 @@ func main() {
 	router.Use(server.LoggingMiddleware())
 	router.Use(server.AuthMiddleware)
 
-	go server.CleanupTask()
-	go server.HasherTask()
+	// go server.CleanupTask()
+	// go server.HasherTask()
 
 	// Start the server
 	listenOn := fmt.Sprintf(":%s", port)

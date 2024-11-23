@@ -6,14 +6,16 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 )
 
 type Server struct {
 	*commons.Server
-	Config   Config
-	S3Client *s3.Client
-	DB       *DB
+	Config      Config
+	S3Client    *s3.Client
+	DB          *DB
+	RedisClient *redis.Client
 }
 
 type DB struct {
@@ -39,13 +41,11 @@ type UploadResponse struct {
 }
 
 type FileInfo struct {
-	ID         uuid.UUID `json:"id"`
-	S3Key      string    `json:"s3_key"`
-	Filename   string    `json:"filename,omitempty"`
-	CreatedAt  time.Time `json:"created_at,omitempty"`
-	ExpiresAt  time.Time `json:"expires_at,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at,omitempty"`
-	IsUploaded bool      `json:"is_uploaded"`
-	Sha1       string    `json:"sha1,omitempty"`
-	Sha256     string    `json:"sha256,omitempty"`
+	ID        uuid.UUID `json:"id"`
+	S3Key     string    `json:"s3_key"`
+	Filename  string    `json:"filename,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	Sha1      string    `json:"sha1,omitempty"`
+	Sha256    string    `json:"sha256,omitempty"`
 }

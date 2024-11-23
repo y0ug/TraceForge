@@ -2,16 +2,19 @@ package sbapi
 
 import (
 	"TraceForge/internals/commons"
-	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	log "github.com/sirupsen/logrus"
@@ -27,128 +30,211 @@ func (s *Server) GetFilesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) {
-	// Generate UUID for the file
-	fileID := uuid.New().String()
 	ctx := r.Context()
 
-	// Create S3 key - you might want to organize files in folders
-	s3Key := fmt.Sprintf("uploads/%s.bin", fileID)
+	// Generate UUID for upload ID
+	uploadID := uuid.New().String()
 
-	// Create presign client
+	// Create S3 key
+	s3Key := fmt.Sprintf("uploads/%s.bin", uploadID)
+
+	// Create presigned URL
 	presignClient := s3.NewPresignClient(s.S3Client)
-
-	// Create put object input
 	putObjectInput := &s3.PutObjectInput{
 		Bucket:      aws.String(s.Config.S3BucketName),
 		Key:         aws.String(s3Key),
 		ContentType: aws.String("application/octet-stream"),
 	}
-
 	expiresIn := time.Minute * 15
-	expiresAt := time.Now().Add(expiresIn)
-	stmt, err := s.DB.DB.PrepareContext(ctx, `
-    INSERT INTO file_uploads (id, s3_key, created_at, expires_at, updated_at, is_uploaded)
-    VALUES ($1, $2, CURRENT_TIMESTAMP, $3, CURRENT_TIMESTAMP, false)
-`)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to prepare statement")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	defer stmt.Close()
 
-	_, err = stmt.Exec(fileID, s3Key, expiresAt)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to insert upload record")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Generate presigned URL
-	presignedReq, err := presignClient.PresignPutObject(context.Background(),
-		putObjectInput,
-		s3.WithPresignExpires(expiresIn)) // URL expires in 15 minutes
+	presignedReq, err := presignClient.PresignPutObject(ctx, putObjectInput, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to generate presigned URL")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	response := UploadResponse{
-		UploadURL: presignedReq.URL,
-		FileID:    fileID,
-		Key:       s3Key,
-		ExpiresIn: int64(expiresIn),
+	// Store uploadID and s3Key in Redis
+	err = s.RedisClient.Set(ctx, uploadID, s3Key, expiresIn).Err()
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to store upload ID in Redis")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	// Log the file upload request
+	response := UploadResponse{
+		UploadURL: presignedReq.URL,
+		FileID:    uploadID,
+		Key:       s3Key,
+		ExpiresIn: int64(expiresIn.Seconds()),
+	}
+
 	s.Logger.WithFields(log.Fields{
-		"file_id": fileID,
-		"s3_key":  s3Key,
+		"upload_id": uploadID,
+		"s3_key":    s3Key,
 	}).Info("Generated presigned URL for file upload")
 
-	// Write success response
 	commons.WriteSuccessResponse(w, "", response)
 }
 
 func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)
-	fileID := vars["file_id"]
+	uploadID := vars["file_id"]
 
-	var s3Key string
+	// Retrieve s3Key from Redis
+	s3Key, err := s.RedisClient.Get(ctx, uploadID).Result()
+	if err == redis.Nil {
+		commons.WriteErrorResponse(w, "Upload ID not found or expired", http.StatusNotFound)
+		return
+	} else if err != nil {
+		s.Logger.WithError(err).Error("Failed to get s3Key from Redis")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Fetch the file from S3
+	resp, err := s.S3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.Config.S3BucketName),
+		Key:    aws.String(s3Key),
+	})
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to get S3 object")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	// Initialize hash.Hash
+	hash := sha256.New()
+
+	// Stream the file and compute hash
+	if _, err := io.Copy(hash, resp.Body); err != nil {
+		s.Logger.WithError(err).Error("Failed to compute SHA256 hash")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Get the final hash
+	hashString := hex.EncodeToString(hash.Sum(nil))
+
+	// Check if file with this hash already exists
+	var existingID string
+	err = s.DB.DB.QueryRowContext(ctx, "SELECT id FROM file_uploads WHERE sha256 = $1", hashString).
+		Scan(&existingID)
+	if err != nil && err != sql.ErrNoRows {
+		s.Logger.WithError(err).Error("Failed to query file by hash")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	fileID := ""
+	msg := "File uploaded successfully"
+	if existingID != "" {
+		s.Logger.WithFields(log.Fields{
+			"sha256": hashString,
+			"id":     existingID,
+		}).Info("Duplicate file detected")
+
+		// Optionally, delete the uploaded duplicate file
+		_, err = s.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(s.Config.S3BucketName),
+			Key:    aws.String(s3Key),
+		})
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to delete duplicate S3 object")
+		}
+
+		// Remove from Redis
+		s.RedisClient.Del(ctx, uploadID)
+
+		fileID = existingID
+		msg = "File already exists"
+	} else {
+
+		// Rename the file in S3 to the SHA256 hash
+		newS3Key := fmt.Sprintf("uploads/%s.bin", hashString)
+
+		// Check if the new S3 key already exists
+		exist, err := s.fileExistsInS3(ctx, newS3Key)
+		// if err != nil {
+		// 	s.Logger.WithError(err).Error("Failed to check if new S3 key exists")
+		// 	commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		// 	return
+		// }
+		if exist {
+			s.Logger.WithFields(log.Fields{
+				"s3_key": newS3Key,
+			}).Error("S3 key already exists when trying to rename")
+			commons.WriteErrorResponse(w, "File with this name already exists", http.StatusInternalServerError)
+			return
+		}
+
+		// Copy object to new key
+		_, err = s.S3Client.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:     aws.String(s.Config.S3BucketName),
+			CopySource: aws.String(fmt.Sprintf("%s/%s", s.Config.S3BucketName, s3Key)),
+			Key:        aws.String(newS3Key),
+		})
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to copy S3 object")
+			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Delete the old object
+		_, err = s.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(s.Config.S3BucketName),
+			Key:    aws.String(s3Key),
+		})
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to delete old S3 object")
+			// Proceed anyway
+		}
+
+		// Insert new record into the database
+		fileID = uuid.New().String()
+		now := time.Now()
+		stmt, err := s.DB.DB.PrepareContext(ctx, `
+        INSERT INTO file_uploads (id, s3_key, created_at, updated_at, sha256)
+        VALUES ($1, $2, $3, $3, $4)
+    `)
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to prepare statement")
+			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		defer stmt.Close()
+
+		_, err = stmt.ExecContext(ctx, fileID, newS3Key, now, hashString)
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to insert file record")
+			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		// Remove from Redis
+		s.RedisClient.Del(ctx, uploadID)
+
+		s.Logger.WithFields(log.Fields{
+			"file_id": fileID,
+			"s3_key":  newS3Key,
+			"sha256":  hashString,
+		}).Info("File uploaded and recorded successfully")
+	}
+
 	file, err := s.DB.GetFile(ctx, fileID)
 	if err != nil {
-		commons.WriteErrorResponse(w, "File id not found", http.StatusNotFound)
-		s.Logger.WithFields(log.Fields{
-			"file_id": fileID,
-			"s3_key":  s3Key,
-		}).Info("Not found in DB")
+		if errors.Is(err, sql.ErrNoRows) {
+			s.Logger.WithError(err).Warn("File not found")
+			commons.WriteErrorResponse(w, "File not found", http.StatusNotFound)
+		} else {
+			s.Logger.WithError(err).WithFields(log.Fields{"id": fileID}).Error("Failed to query file")
+			commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		}
 		return
 	}
-
-	exist, err := s.fileExistsInS3(file.S3Key)
-	if err != nil {
-		s.Logger.WithFields(log.Fields{
-			"file_id": fileID,
-			"s3_key":  file.S3Key,
-		}).WithError(err).Error("Not found in DB")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	if !exist {
-		s.Logger.WithFields(log.Fields{
-			"file_id": fileID,
-			"s3_key":  file.S3Key,
-		}).Info("Not found in S3")
-		commons.WriteErrorResponse(w, "File not found in the bucket", http.StatusNotFound)
-		return
-	}
-
-	stmt, err := s.DB.DB.PrepareContext(ctx, `
-    UPDATE file_uploads
-    SET is_uploaded = true, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $1
-`)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to prepare statement")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	defer stmt.Close()
-
-	_, err = stmt.ExecContext(ctx, fileID)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to update upload record")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	s.Logger.WithFields(log.Fields{
-		"file_id": fileID,
-	}).Info("user finish to upload")
-
-	commons.WriteSuccessResponse(w, "", nil)
+	s.Logger.WithFields(log.Fields{"id": fileID}).Info("file info")
+	commons.WriteSuccessResponse(w, msg, file)
 }
 
 func (s *Server) UpdateFileHandler(w http.ResponseWriter, r *http.Request) {

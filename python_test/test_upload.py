@@ -27,7 +27,7 @@ def main(file_path):
 
     presign_data = presign_response.json()["data"]
     upload_url = presign_data["upload_url"]
-    file_id = presign_data["file_id"]
+    upload_id = presign_data["file_id"]
 
     # Step 2: Upload file to S3
     try:
@@ -43,13 +43,16 @@ def main(file_path):
 
     # Step 3: Finalize upload
     finish_response = requests.get(
-        f"{base_url}/upload/{file_id}/finish", headers=headers
+        f"{base_url}/upload/{upload_id}/finish", headers=headers
     )
     print(finish_response.status_code)
     if finish_response.status_code != 200:
         print(f"Failed to finalize upload: {finish_response.text}")
         sys.exit(1)
 
+    data = finish_response.json()
+    file_id = data["data"]["id"]
+    print(data)
     print("Upload completed successfully!")
     resp = requests.get(f"{base_url}/file/{file_id}/dl", headers=headers)
     data = resp.json()

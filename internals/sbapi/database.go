@@ -24,9 +24,7 @@ func (d *DB) CreateTables() error {
         s3_key TEXT,
         filename TEXT DEFAULT '',
         created_at TIMESTAMP,
-        expires_at TIMESTAMP,
         updated_at TIMESTAMP,
-        is_uploaded BOOLEAN,
         sha1 TEXT DEFAULT '',
         sha256 TEXT DEFAULT ''
     );
@@ -36,7 +34,7 @@ func (d *DB) CreateTables() error {
 
 func (d *DB) GetFiles(ctx context.Context) ([]FileInfo, error) {
 	rows, err := d.DB.QueryContext(ctx, `
-        SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_uploaded, sha1, sha256
+        SELECT id, filename, s3_key, created_at,  updated_at, sha1, sha256
         FROM file_uploads 
         ORDER BY created_at DESC
     `)
@@ -52,9 +50,7 @@ func (d *DB) GetFiles(ctx context.Context) ([]FileInfo, error) {
 			&file.Filename,
 			&file.S3Key,
 			&file.CreatedAt,
-			&file.ExpiresAt,
 			&file.UpdatedAt,
-			&file.IsUploaded,
 			&file.Sha1,
 			&file.Sha256,
 		); err != nil {
@@ -69,7 +65,7 @@ func (d *DB) GetFiles(ctx context.Context) ([]FileInfo, error) {
 func (d *DB) GetFile(ctx context.Context, fileID string) (*FileInfo, error) {
 	var file FileInfo
 	err := d.DB.QueryRowContext(ctx, `
-        SELECT id, filename, s3_key, created_at, expires_at, updated_at, is_uploaded,sha1, sha256
+        SELECT id, filename, s3_key, created_at, updated_at, sha1, sha256
         FROM file_uploads
         WHERE id = $1 
     `, fileID).Scan(
@@ -77,9 +73,7 @@ func (d *DB) GetFile(ctx context.Context, fileID string) (*FileInfo, error) {
 		&file.Filename,
 		&file.S3Key,
 		&file.CreatedAt,
-		&file.ExpiresAt,
 		&file.UpdatedAt,
-		&file.IsUploaded,
 		&file.Sha1,
 		&file.Sha256,
 	)
