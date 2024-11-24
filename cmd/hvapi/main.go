@@ -1,6 +1,7 @@
 package main
 
 import (
+	"TraceForge/cmd/hvapi/docs"
 	"TraceForge/internals/commons"
 	"TraceForge/internals/hvapi"
 	"TraceForge/pkg/hvlib"
@@ -10,25 +11,54 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	httpSwagger "github.com/swaggo/http-swagger" // Swagger middleware
 )
+
+// @title Hypervisor API
+// @version 1.0
+// @description API for managing virtual machines across different hypervisors.
+// @termsOfService http://example.com/terms/
+
+// @contact.name API Support
+// @contact.url http://www.example.com/support
+// @contact.email support@example.com
+
+// @license.name Apache 2.0
+// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+
+// @host localhost:8081
+// @BasePath /
+
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name Authorization
 
 func initRouter(server *hvapi.Server) *mux.Router {
 	// Create a new router
 	router := mux.NewRouter()
 
+	// Create a subrouter for the Swagger route (no middleware applied)
+	swaggerRouter := router.PathPrefix("/swagger/").Subrouter()
+	swaggerRouter.PathPrefix("/").Handler(httpSwagger.WrapHandler)
+
+	// Create a subrouter for API routes (middleware applied)
+	apiRouter := router.PathPrefix("/").Subrouter()
+
 	// Define routes
-	router.HandleFunc("/providers", server.ListProvidersHandler).Methods("GET")
-	router.HandleFunc("/{provider}/{vmname}/snapshots", server.SnapshotsVMHandler).Methods("GET")
-	router.HandleFunc("/{provider}", server.ListVMsHandler).Methods("GET")
-	router.HandleFunc("/{provider}/{vmname}/snapshot/{snapshotname}", server.BasicVMHandler("snapshot")).Methods("GET")
-	router.HandleFunc("/{provider}/{vmname}/snapshot/{snapshotname}", server.BasicVMHandler("snapshot")).Methods("DELETE")
+	apiRouter.HandleFunc("/providers", server.ListProvidersHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}/{vmname}/snapshots", server.SnapshotsVMHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}", server.ListVMsHandler).Methods("GET")
 
-	// Define VM operation routes dynamically
-	actions := []string{"start", "stop", "suspend", "revert", "reset"}
-	for _, action := range actions {
-		router.HandleFunc(fmt.Sprintf("/{provider}/{vmname}/%s", action), server.BasicVMHandler(action)).Methods("GET")
-	}
+	apiRouter.HandleFunc("/{provider}/{vmname}/snapshot/{snapshotname}", server.TakeSnapshotHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}/{vmname}/snapshot/{snapshotname}", server.DeleteSnapshotHandler).Methods("DELETE")
+	apiRouter.HandleFunc("/{provider}/{vmname}/start", server.StartVMHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}/{vmname}/stop", server.StopVMHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}/{vmname}/suspend", server.SuspendVMHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}/{vmname}/revert", server.RevertVMHandler).Methods("GET")
+	apiRouter.HandleFunc("/{provider}/{vmname}/reset", server.ResetVMHandler).Methods("GET")
 
+	apiRouter.Use(server.LoggingMiddleware())
+	apiRouter.Use(server.AuthMiddleware)
 	return router
 }
 
@@ -49,7 +79,7 @@ func main() {
 	}
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8081"
+		port = "8080"
 	}
 
 	configLoader, err := hvlib.NewConfigLoader(configPath)
@@ -76,11 +106,10 @@ func main() {
 	}
 
 	router := initRouter(server)
-	router.Use(server.LoggingMiddleware())
-	router.Use(server.AuthMiddleware)
 
 	// Start the server
 	listenOn := fmt.Sprintf(":%s", port)
+	docs.SwaggerInfo.Host = fmt.Sprintf("127.0.0.1%s", listenOn)
 	logger.Infof("Server listening on %s", listenOn)
 	if err := http.ListenAndServe(
 		listenOn, router); err != nil {

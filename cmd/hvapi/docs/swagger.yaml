@@ -1,0 +1,419 @@
+basePath: /
+definitions:
+  commons.HttpResp:
+    properties:
+      data: {}
+      message:
+        example: Operation completed successfully
+        type: string
+      status:
+        example: success
+        type: string
+    type: object
+host: localhost:8081
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+    url: http://www.example.com/support
+  description: API for managing virtual machines across different hypervisors.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://example.com/terms/
+  title: Hypervisor API
+  version: "1.0"
+paths:
+  /{provider}:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of virtual machines for a given provider
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: List virtual machines
+      tags:
+      - vms
+  /{provider}/{vmname}/reset:
+    get:
+      consumes:
+      - application/json
+      description: Reset a specific virtual machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Reset a virtual machine
+      tags:
+      - vms
+  /{provider}/{vmname}/revert:
+    get:
+      consumes:
+      - application/json
+      description: Revert a specific virtual machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Revert a virtual machine
+      tags:
+      - vms
+  /{provider}/{vmname}/snapshot/{snapshotname}:
+    delete:
+      consumes:
+      - application/json
+      description: Delete a snapshot with the specified name for a specific virtual
+        machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      - description: Snapshot name
+        in: path
+        name: snapshotname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Delete a snapshot of a virtual machine
+      tags:
+      - snapshots
+    get:
+      consumes:
+      - application/json
+      description: Take a snapshot with the specified name for a specific virtual
+        machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      - description: Snapshot name
+        in: path
+        name: snapshotname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Take a snapshot of a virtual machine
+      tags:
+      - snapshots
+  /{provider}/{vmname}/snapshots:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of snapshots for a specific virtual machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: List snapshots of a virtual machine
+      tags:
+      - snapshots
+  /{provider}/{vmname}/start:
+    get:
+      consumes:
+      - application/json
+      description: Start a specific virtual machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Start a virtual machine
+      tags:
+      - vms
+  /{provider}/{vmname}/stop:
+    get:
+      consumes:
+      - application/json
+      description: Stop a specific virtual machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Stop a virtual machine
+      tags:
+      - vms
+  /{provider}/{vmname}/suspend:
+    get:
+      consumes:
+      - application/json
+      description: Suspend a specific virtual machine
+      parameters:
+      - description: Provider name
+        in: path
+        name: provider
+        required: true
+        type: string
+      - description: Virtual Machine name
+        in: path
+        name: vmname
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: Suspend a virtual machine
+      tags:
+      - vms
+  /providers:
+    get:
+      consumes:
+      - application/json
+      description: Get a list of available virtualization providers
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/commons.HttpResp'
+      security:
+      - ApiKeyAuth: []
+      summary: List available providers
+      tags:
+      - providers
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
