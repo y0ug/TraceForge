@@ -80,12 +80,22 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create tables")
 	}
 
+	taskManager := sbapi.NewTaskManager()
+	taskManager.Start()
+	defer taskManager.Stop()
+
 	server := &sbapi.Server{
 		Server:      &commons.Server{Logger: logger},
 		Config:      config,
 		S3Client:    s3Client,
 		DB:          db,
 		RedisClient: redisClient,
+		TaskManager: taskManager,
+	}
+
+	_, err = taskManager.AddTask("CleanupTask", "* * * * *", server.CleanOrphanFiles)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to add CleanupTask")
 	}
 
 	// Create a new router
@@ -94,12 +104,15 @@ func main() {
 	// Define routes
 	router.HandleFunc("/upload/presign", server.GetPresignedURLHandler).Methods("GET")
 	router.HandleFunc("/upload/presign", server.GetPresignedURLHandler).Methods("GET")
-	router.HandleFunc("/upload/{file_id}/finish", server.FinishUploadHandler).Methods("GET")
+	router.HandleFunc("/upload/{file_id}/complete", server.CompleteUploadHandler).Methods("GET")
 	router.HandleFunc("/files", server.GetFilesHandler).Methods("GET")
 	router.HandleFunc("/file/{file_id}", server.UpdateFileHandler).Methods("PUT")
 	router.HandleFunc("/file/{file_id}", server.DeleteFileHandler).Methods("DELETE")
 	router.HandleFunc("/file/{file_id}", server.GetFileHandler).Methods("GET")
 	router.HandleFunc("/file/{file_id}/dl", server.GetFileDlHandler).Methods("GET")
+
+	router.HandleFunc("/tasks", server.TasksHandler).Methods("GET")
+	router.HandleFunc("/tasks/{task_name}/run", server.RunTaskHandler).Methods("GET")
 
 	router.Use(server.LoggingMiddleware())
 	router.Use(server.AuthMiddleware)

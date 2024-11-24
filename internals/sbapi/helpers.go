@@ -8,9 +8,10 @@ import (
 )
 
 func (s *Server) fileExistsInS3(ctx context.Context, key string) (bool, error) {
-	_, err := s.S3Client.HeadObject(ctx, &s3.HeadObjectInput{
+	head, err := s.S3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(s.Config.S3BucketName),
 		Key:    aws.String(key),
 	})
+	s.Logger.WithField("head", head).WithField("err", err).Info("Checking if file exists in S3")
 	return err != nil, nil
 }

@@ -16,6 +16,7 @@ type Server struct {
 	S3Client    *s3.Client
 	DB          *DB
 	RedisClient *redis.Client
+	TaskManager *TaskManager
 }
 
 type DB struct {

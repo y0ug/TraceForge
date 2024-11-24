@@ -2,178 +2,112 @@ package sbapi
 
 import (
 	"context"
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/uuid"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	log "github.com/sirupsen/logrus"
 )
 
-func (s *Server) HasherTask() {
-	s.Logger.Infof("Hasher service started")
+func (s *Server) CleanOrphanFiles() error {
+	ctx := context.Background()
+
+	s.Logger.Info("Running Orphan File Cleaner")
+	// Step 1: Retrieve all S3 keys from the database
+	dbKeys, err := s.DB.GetAllS3Keys(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve S3 keys from database: %w", err)
+	}
+
+	dbKeysSet := make(map[string]struct{}, len(dbKeys))
+	for _, key := range dbKeys {
+		dbKeysSet[key] = struct{}{}
+	}
+
+	// Step 2: List all objects in the S3 bucket
+	s3KeysSet := make(map[string]struct{})
+	var continuationToken *string
 
 	for {
-		// Fetch files needing hash calculation
-		rows, err := s.DB.DB.Query(`
-            SELECT id, s3_key
-            FROM file_uploads
-            WHERE sha256 = '' AND is_uploaded = true
-        `)
+		listInput := &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.Config.S3BucketName),
+			ContinuationToken: continuationToken,
+		}
+
+		result, err := s.S3Client.ListObjectsV2(ctx, listInput)
 		if err != nil {
-			s.Logger.WithError(err).Error("Failed to query uploads needing hash calculation")
-			time.Sleep(1 * time.Minute)
-			continue
+			return fmt.Errorf("failed to list objects in S3: %w", err)
 		}
 
-		var files []FileInfo
-		for rows.Next() {
-			var file FileInfo
-			if err := rows.Scan(&file.ID, &file.S3Key); err != nil {
-				s.Logger.WithError(err).Error("Failed to scan row")
-				continue
-			}
-			files = append(files, file)
-		}
-		rows.Close()
-
-		// Process each file
-		for _, file := range files {
-			if err := s.processFile(file); err != nil {
+		// Adjust for the expired time
+		// For case when the client doesn't have call /upload/{upload_id}/complete
+		cutoffTime := time.Now().Add(-1 * time.Minute)
+		// In the loop where you collect S3 keys
+		for _, item := range result.Contents {
+			if item.LastModified.Before(cutoffTime) {
+				s3KeysSet[*item.Key] = struct{}{}
+			} else {
 				s.Logger.WithFields(log.Fields{
-					"file_id": file.ID,
-					"s3_key":  file.S3Key,
-				}).WithError(err).Error("Failed to process file")
+					"key":           *item.Key,
+					"last_modified": item.LastModified,
+				}).Info("Skipping recent object")
 			}
 		}
 
-		time.Sleep(1 * time.Minute)
-	}
-}
-
-func (s *Server) processFile(file FileInfo) error {
-	// Fetch the file from S3
-	resp, err := s.S3Client.GetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String(s.Config.S3BucketName),
-		Key:    aws.String(file.S3Key),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get S3 object: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Calculate the hash
-	hash := sha256.New()
-	if _, err := io.Copy(hash, resp.Body); err != nil {
-		return fmt.Errorf("failed to calculate hash: %w", err)
-	}
-	hash256 := hex.EncodeToString(hash.Sum(nil))
-
-	hash = sha1.New()
-	if _, err := io.Copy(hash, resp.Body); err != nil {
-		return fmt.Errorf("failed to calculate hash: %w", err)
-	}
-	hash1 := hex.EncodeToString(hash.Sum(nil))
-
-	// Update the database with the hash
-	stmt, err := s.DB.DB.Prepare(`
-        UPDATE file_uploads
-        SET sha1= $1, sha256 = $2 
-        WHERE id = $3 
-    `)
-	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
-	}
-	defer stmt.Close()
-
-	if _, err := stmt.Exec(hash1, hash256, file.ID); err != nil {
-		return fmt.Errorf("failed to update upload record: %w", err)
+		if *result.IsTruncated {
+			continuationToken = result.NextContinuationToken
+		} else {
+			break
+		}
 	}
 
-	s.Logger.WithFields(log.Fields{
-		"file_id": file.ID,
-		"s3_key":  file.S3Key,
-		"sha1":    hash1,
-		"sha256":  hash256,
-	}).Info("Updated file with hash")
-
-	return nil
-}
-
-func (s *Server) CleanupTask() {
-	for {
-		s.cleanupExpiredEntries()
-		time.Sleep(15 * time.Minute)
+	// Step 3: Identify orphaned files
+	var orphanKeys []string
+	for key := range s3KeysSet {
+		if _, exists := dbKeysSet[key]; !exists {
+			orphanKeys = append(orphanKeys, key)
+		}
 	}
-}
 
-func (s *Server) cleanupExpiredEntries() {
-	rows, err := s.DB.DB.Query(`
-        SELECT id, s3_key FROM file_uploads
-        WHERE expires_at <=  CURRENT_TIMESTAMP AND is_uploaded = false 
-    `)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to query expired entries")
-		return
+	// Step 4: Delete orphaned files
+	if len(orphanKeys) == 0 {
+		s.Logger.Info("No orphaned files found")
+		return nil
 	}
-	defer rows.Close()
 
-	var ids []uuid.UUID
-	var s3Keys []string
-	for rows.Next() {
-		var id uuid.UUID
-		var s3Key string
-		if err := rows.Scan(&id, &s3Key); err != nil {
-			s.Logger.WithError(err).Error("Failed to scan row")
+	s.Logger.Infof("Found %d orphaned files", len(orphanKeys))
+
+	const batchSize = 1000 // S3 DeleteObjects allows up to 1000 objects per request
+	for i := 0; i < len(orphanKeys); i += batchSize {
+		end := i + batchSize
+		if end > len(orphanKeys) {
+			end = len(orphanKeys)
+		}
+
+		objectsToDelete := make([]types.ObjectIdentifier, 0, end-i)
+		for _, key := range orphanKeys[i:end] {
+			objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: aws.String(key)})
+		}
+
+		deleteInput := &s3.DeleteObjectsInput{
+			Bucket: aws.String(s.Config.S3BucketName),
+			Delete: &types.Delete{
+				Objects: objectsToDelete,
+				Quiet:   aws.Bool(true),
+			},
+		}
+
+		_, err := s.S3Client.DeleteObjects(ctx, deleteInput)
+		if err != nil {
+			s.Logger.WithError(err).Error("Failed to delete a batch of orphaned files")
+			// Decide whether to continue or return the error based on your preference
 			continue
 		}
-		ids = append(ids, id)
-		s3Keys = append(s3Keys, s3Key)
+
+		s.Logger.Infof("Deleted %d orphaned files", len(objectsToDelete))
 	}
-
-	for i, id := range ids {
-		s.deleteFileUpload(id, s3Keys[i])
-	}
-
-	s.Logger.Info("Completed cleanup of expired entries")
-}
-
-func (s *Server) deleteFileUpload(id uuid.UUID, s3Key string) {
-	tx, err := s.DB.DB.Begin()
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to begin transaction")
-		return
-	}
-
-	_, err = tx.Exec("DELETE FROM file_uploads WHERE id = $1", id)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to delete record")
-		tx.Rollback()
-		return
-	}
-
-	_, err = s.S3Client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-		Bucket: aws.String(s.Config.S3BucketName),
-		Key:    aws.String(s3Key),
-	})
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to delete S3 object")
-		tx.Rollback()
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		s.Logger.WithError(err).Error("Failed to commit transaction")
-		return
-	}
-
-	s.Logger.WithFields(log.Fields{
-		"id":     id,
-		"s3_key": s3Key,
-	}).Info("Deleted expired file upload")
+	s.Logger.Info("Orphan File Cleaner completed successfully")
+	return nil
 }

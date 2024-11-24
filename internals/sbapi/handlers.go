@@ -77,7 +77,7 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	commons.WriteSuccessResponse(w, "", response)
 }
 
-func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) CompleteUploadHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	vars := mux.Vars(r)
 	uploadID := vars["file_id"]
@@ -153,21 +153,6 @@ func (s *Server) FinishUploadHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Rename the file in S3 to the SHA256 hash
 		newS3Key := fmt.Sprintf("uploads/%s.bin", hashString)
-
-		// Check if the new S3 key already exists
-		exist, err := s.fileExistsInS3(ctx, newS3Key)
-		// if err != nil {
-		// 	s.Logger.WithError(err).Error("Failed to check if new S3 key exists")
-		// 	commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		// 	return
-		// }
-		if exist {
-			s.Logger.WithFields(log.Fields{
-				"s3_key": newS3Key,
-			}).Error("S3 key already exists when trying to rename")
-			commons.WriteErrorResponse(w, "File with this name already exists", http.StatusInternalServerError)
-			return
-		}
 
 		// Copy object to new key
 		_, err = s.S3Client.CopyObject(ctx, &s3.CopyObjectInput{
@@ -373,4 +358,30 @@ func (s *Server) DeleteFileHandler(w http.ResponseWriter, r *http.Request) {
 	}).Info("Deleted file ")
 
 	commons.WriteSuccessResponse(w, "File deleted", nil)
+}
+
+func (s *Server) TasksHandler(w http.ResponseWriter, r *http.Request) {
+	tasks := s.TaskManager.GetTasks()
+	s.Logger.Info("tasks", tasks)
+	commons.WriteSuccessResponse(w, "", tasks)
+}
+
+func (s *Server) RunTaskHandler(w http.ResponseWriter, r *http.Request) {
+	taskName := mux.Vars(r)["task_name"]
+	task := s.TaskManager.RunTask(taskName)
+	if task == nil {
+		commons.WriteErrorResponse(w, "Task not found", http.StatusNotFound)
+		return
+	}
+	if !task.Enabled {
+		commons.WriteErrorResponseData(w, "Task is disable", task, http.StatusConflict)
+	}
+	if task.Status == "running" {
+		commons.WriteErrorResponseData(w, "Task is already running", task, http.StatusConflict)
+		return
+	}
+
+	// Refresh task
+	task, _ = s.TaskManager.GetTask(taskName)
+	commons.WriteSuccessResponse(w, "Task started", task)
 }

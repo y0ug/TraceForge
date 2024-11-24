@@ -88,3 +88,26 @@ func (d *DB) DeleteFile(ctx context.Context, fileID string) error {
 	_, err := d.DB.ExecContext(ctx, "DELETE FROM file_uploads WHERE id = $1", fileID)
 	return err
 }
+
+func (d *DB) GetAllS3Keys(ctx context.Context) ([]string, error) {
+	rows, err := d.DB.QueryContext(ctx, `SELECT s3_key FROM file_uploads`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var s3Keys []string
+	for rows.Next() {
+		var s3Key string
+		if err := rows.Scan(&s3Key); err != nil {
+			return nil, err
+		}
+		s3Keys = append(s3Keys, s3Key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return s3Keys, nil
+}

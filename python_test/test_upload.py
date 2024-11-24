@@ -43,7 +43,7 @@ def main(file_path):
 
     # Step 3: Finalize upload
     finish_response = requests.get(
-        f"{base_url}/upload/{upload_id}/finish", headers=headers
+        f"{base_url}/upload/{upload_id}/complete", headers=headers
     )
     print(finish_response.status_code)
     if finish_response.status_code != 200:

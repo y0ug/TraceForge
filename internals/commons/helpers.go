@@ -50,3 +50,9 @@ func WriteErrorResponse(w http.ResponseWriter, message string, httpStatus int) {
 		httpStatus,
 		HttpResp{Status: "error", Data: nil, Message: message})
 }
+
+func WriteErrorResponseData(w http.ResponseWriter, message string, data interface{}, httpStatus int) {
+	WriteJSONResponse(w,
+		httpStatus,
+		HttpResp{Status: "error", Data: data, Message: message})
+}
