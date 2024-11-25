@@ -84,13 +84,19 @@ func main() {
 	taskManager.Start()
 	defer taskManager.Stop()
 
+	agentsConfig, err := sbapi.LoadAgentsConfig("agents.toml")
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to load agents config")
+	}
+
 	server := &sbapi.Server{
-		Server:      &commons.Server{Logger: logger},
-		Config:      config,
-		S3Client:    s3Client,
-		DB:          db,
-		RedisClient: redisClient,
-		TaskManager: taskManager,
+		Server:       &commons.Server{Logger: logger},
+		Config:       config,
+		S3Client:     s3Client,
+		DB:           db,
+		RedisClient:  redisClient,
+		TaskManager:  taskManager,
+		AgentsConfig: agentsConfig,
 	}
 
 	_, err = taskManager.AddTask("CleanupTask", "* * * * *", server.CleanOrphanFiles)

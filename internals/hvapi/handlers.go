@@ -27,6 +27,14 @@ func (s *Server) ListProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	commons.WriteSuccessResponse(w, "", providerNames)
 }
 
+func (s *Server) ListAgents(w http.ResponseWriter, r *http.Request) {
+	providerNames := make([]string, 0, len(s.Providers.Providers))
+	for name := range s.Providers.Providers {
+		providerNames = append(providerNames, name)
+	}
+	commons.WriteSuccessResponse(w, "", providerNames)
+}
+
 // ListVMsHandler godoc
 // @Summary List virtual machines
 // @Description Get a list of virtual machines for a given provider

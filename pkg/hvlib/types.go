@@ -18,8 +18,10 @@ type Snapshot struct {
 }
 
 type VM struct {
-	ID   string
-	Path string
+	ID      string
+	Path    string
+	AgentID string
+	Plugins []string
 }
 
 type VmNotFoundError struct {

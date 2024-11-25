@@ -12,11 +12,12 @@ import (
 
 type Server struct {
 	*commons.Server
-	Config      Config
-	S3Client    *s3.Client
-	DB          *DB
-	RedisClient *redis.Client
-	TaskManager *TaskManager
+	Config       Config
+	S3Client     *s3.Client
+	DB           *DB
+	RedisClient  *redis.Client
+	TaskManager  *TaskManager
+	AgentsConfig *AgentsConfig
 }
 
 type DB struct {
@@ -49,4 +50,29 @@ type FileInfo struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	Sha1      string    `json:"sha1,omitempty"`
 	Sha256    string    `json:"sha256,omitempty"`
+}
+
+type AgentsConfig struct {
+	Hvapi         map[string]HvapiAgentsConfig `toml:"hvapi"`
+	AgentDefaults AgentDefaultsConfig          `toml:"agent_defaults,omitempty"`
+	Agents        []AgentConfig                `toml:"agent"`
+}
+
+type AgentDefaultsConfig struct {
+	Plugins   []string `toml:"plugins,omitempty"`
+	HvapiName string   `toml:"hvapi_name,omitempty"`
+	Provider  string   `toml:"provider,omitempty"`
+}
+
+type HvapiAgentsConfig struct {
+	URL       string `toml:"url"`
+	AuthToken string `toml:"auth_token"`
+}
+
+type AgentConfig struct {
+	Name      string   `toml:"name"`
+	AgentUUID string   `toml:"agent_uuid"`
+	Provider  string   `toml:"provider,omitempty"`
+	Plugins   []string `toml:"plugins,omitempty"`
+	HvapiName string   `toml:"hvapi_name,omitempty"`
 }
