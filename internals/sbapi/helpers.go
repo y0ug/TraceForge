@@ -28,7 +28,7 @@ func (s *Server) getAgentConfigByID(agentID uuid.UUID) (*AgentConfig, error) {
 	return nil, fmt.Errorf("agent with ID %s not found", agentID)
 }
 
-func (s *Server) GeneratePresignedFileURL(ctx context.Context, s3Key string, expiresIn time.Duration) (string, error) {
+func (s *Server) GeneratePresignedFileURLGet(ctx context.Context, s3Key string, expiresIn time.Duration) (string, error) {
 	// Create presigned URL
 	presignClient := s3.NewPresignClient(s.S3Client)
 	putObjectInput := &s3.GetObjectInput{
@@ -37,6 +37,22 @@ func (s *Server) GeneratePresignedFileURL(ctx context.Context, s3Key string, exp
 	}
 
 	presignedReq, err := presignClient.PresignGetObject(ctx, putObjectInput, s3.WithPresignExpires(expiresIn))
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to generate presigned URL")
+		return "", err
+	}
+	return presignedReq.URL, nil
+}
+
+func (s *Server) GeneratePresignedFileURLPut(ctx context.Context, s3Key string, expiresIn time.Duration) (string, error) {
+	// Create presigned URL
+	presignClient := s3.NewPresignClient(s.S3Client)
+	putObjectInput := &s3.PutObjectInput{
+		Bucket: aws.String(s.Config.S3BucketName),
+		Key:    aws.String(s3Key),
+	}
+
+	presignedReq, err := presignClient.PresignPutObject(ctx, putObjectInput, s3.WithPresignExpires(expiresIn))
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to generate presigned URL")
 		return "", err

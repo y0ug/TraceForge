@@ -191,6 +191,29 @@ func (d *DB) UpdateAnalysisTaskResults(ctx context.Context, taskID uuid.UUID, re
 	return err
 }
 
+func (d *DB) GetNextPendingAnalysisTaskForAgent(ctx context.Context, agentID string) (*AnalysisTask, error) {
+	row := d.DB.QueryRowContext(ctx, `
+        SELECT id, file_id, agent_id, plugin, status, args, result, created_at, updated_at
+        FROM analysis_tasks
+        WHERE status = 'pending' AND agent_id = $1
+        ORDER BY created_at ASC
+        LIMIT 1
+    `, agentID)
+
+	var task AnalysisTask
+	var result sql.NullString
+	err := row.Scan(&task.ID, &task.FileID, &task.AgentID, &task.Plugin, &task.Status, &task.Args, &result, &task.CreatedAt, &task.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if result.Valid {
+		task.Result = json.RawMessage(result.String)
+	}
+	return &task, nil
+}
+
 // GetPendingAnalysisTasks retrieves analysis tasks with 'pending' status
 func (d *DB) GetPendingAnalysisTasks(ctx context.Context) ([]AnalysisTask, error) {
 	rows, err := d.DB.QueryContext(ctx, `

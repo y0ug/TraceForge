@@ -39,7 +39,7 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	// Create S3 key
 	s3Key := fmt.Sprintf("uploads/%s.bin", uploadID)
 
-	fileURL, err := s.GeneratePresignedFileURL(ctx, s3Key, expiresIn)
+	fileURL, err := s.GeneratePresignedFileURLPut(ctx, s3Key, expiresIn)
 	if err != nil {
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return

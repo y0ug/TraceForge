@@ -114,9 +114,13 @@ func main() {
 		logger.WithError(err).Fatal("Failed to add CleanupTask")
 	}
 
-	_, err = taskManager.AddTask("AnalysisTaskProcessor", "", server.StartAnalysisTaskProcessor)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to add CleanupTask")
+	for _, agent := range agentsConfig.Agents {
+		name := fmt.Sprintf("AgentTaskWorker-%s", agent.ID)
+		go server.StartAgentTaskWorker(agent.ID)
+		_, err = taskManager.AddTask(name, "", server.WrapStartAgentTaskWorker(agent.ID))
+		if err != nil {
+			logger.WithError(err).Fatalf("Failed to add %s", name)
+		}
 	}
 
 	// Create a new router

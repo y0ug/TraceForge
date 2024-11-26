@@ -5,51 +5,67 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+func (s *Server) WrapStartAgentTaskWorker(agentID string) func() error {
+	return func() error {
+		return s.StartAgentTaskWorker(agentID)
+	}
+}
+
 // Should had a way to stop the task with the taskManager
-func (s *Server) StartAnalysisTaskProcessor() error {
-	for {
-		s.processPendingAnalysisTasks()
-		time.Sleep(5 * time.Second) // Adjust the interval as needed
-	}
-}
-
-func (s *Server) processPendingAnalysisTasks() {
+// TODO: acquireVMLock should be called if we start mutiple backend
+// or the task should run on only one backend
+func (s *Server) StartAgentTaskWorker(agentID string) error {
 	ctx := context.Background()
-	tasks, err := s.DB.GetPendingAnalysisTasks(ctx)
+	s.Logger.Infof("Starting task worker for agent %s", agentID)
+
+	parsedUUID, err := uuid.Parse(agentID)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to get pending analysis tasks")
-		return
+		err := fmt.Errorf("Error parsing UUID: %v\n", err)
+		s.Logger.WithError(err)
+		return err
 	}
-	for _, task := range tasks {
-		s.Logger.Infof("Processing analysis task %s", task.ID)
-		go s.handleAnalysisTask(task)
+	// Initialize HvClient for this agent
+	agentConfig, err := s.getAgentConfigByID(parsedUUID)
+	if err != nil {
+		s.Logger.WithError(err).Errorf("Failed to get agent config for agent %s", agentID)
+		return err
+	}
+
+	hvClient := NewHvClient(agentConfig.HvapiConfig.URL, agentConfig.HvapiConfig.AuthToken)
+
+	for {
+		task, err := s.DB.GetNextPendingAnalysisTaskForAgent(ctx, agentID)
+		if err != nil {
+			s.Logger.WithError(err).Errorf("Failed to get pending task for agent %s", agentID)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		if task == nil {
+			// Sleep and try again
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		s.Logger.Infof("Processing analysis task %s for agent %s", task.ID, agentID)
+		s.handleAnalysisTask(*task, hvClient)
+		time.Sleep(1 * time.Second)
 	}
 }
 
-func (s *Server) handleAnalysisTask(task AnalysisTask) {
+func (s *Server) handleAnalysisTask(task AnalysisTask, hvClient *HvClient) {
 	ctx := context.Background()
 
 	agentConfig, err := s.getAgentConfigByID(task.AgentID)
 	if err != nil {
-		// Handle error...
+		s.Logger.WithError(err).Error("Failed to get agent config")
+		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
 		return
 	}
-	vmName := agentConfig.Name
-
-	// Try to acquire VM lock
-	acquired, err := s.acquireVMLock(vmName, 30*time.Minute)
-	if err != nil || !acquired {
-		s.Logger.WithError(err).Errorf("Failed to acquire lock for VM %s", vmName)
-		// Optionally reschedule or fail the task
-		return
-	}
-	defer s.releaseVMLock(vmName)
 
 	// Update task status to 'running'
 	err = s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "running")
@@ -58,43 +74,49 @@ func (s *Server) handleAnalysisTask(task AnalysisTask) {
 		return
 	}
 
-	// Get agent configuration
-	agentConfig, err = s.getAgentConfigByID(task.AgentID)
+	// Use HvClient to revert VM
+	_, err = hvClient.RevertVM(ctx, agentConfig.Provider, agentConfig.Name)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to get agent config")
+		if hvErr, ok := err.(*HvError); ok {
+			s.Logger.Errorf("HV API Error during RevertVM - %s: %s", hvErr.Status, hvErr.Message)
+		} else {
+			s.Logger.WithError(err).Error("Failed to revert VM")
+		}
 		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
 		return
 	}
 
-	// Revert VM using the HVAPI server associated with the agent
-	if err := s.RevertVM(agentConfig); err != nil {
-		s.Logger.WithError(err).Error("Failed to revert VM")
+	// Use HvClient to start VM
+	_, err = hvClient.StartVM(ctx, agentConfig.Provider, agentConfig.Name)
+	if err != nil {
+		if hvErr, ok := err.(*HvError); ok {
+			s.Logger.Errorf("HV API Error during StartVM - %s: %s", hvErr.Status, hvErr.Message)
+		} else {
+			s.Logger.WithError(err).Error("Failed to start VM")
+		}
 		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
 		return
 	}
 
-	if err := s.StartVM(agentConfig); err != nil {
-		s.Logger.WithError(err).Error("Failed to start VM")
-		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
-		return
-	}
+	// Defer stopping the VM using HvClient
+	defer func() {
+		resp, err := hvClient.StopVM(ctx, agentConfig.Provider, agentConfig.Name)
+		if err != nil {
+			if hvErr, ok := err.(*HvError); ok {
+				s.Logger.Errorf("HV API Error during StopVM - %s: %s", hvErr.Status, hvErr.Message)
+			} else {
+				s.Logger.WithError(err).Error("Failed to stop VM")
+			}
+			s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
+			return
+		}
+		if resp.Status != "success" {
+			s.Logger.Errorf("Failed to stop VM: %s", resp.Message)
+			s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
+			return
+		}
+	}()
 
-	// stop VM should append on error too
-	// defer func() {
-	// 	if err := s.StopVM(agentConfig); err != nil {
-	// 		s.Logger.WithError(err).Error("Failed to stop VM")
-	// 		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
-	// 		return
-	// 	}
-	// }()
-
-	// Wait for the agent to become available
-	// if err := s.WaitForAgent(task.AgentID, 5*time.Minute); err != nil {
-	// 	s.Logger.WithError(err).Error("Agent did not become available")
-	// 	s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed", nil)
-	// 	return
-	// }
-	//
 	// Send task to agent
 	if err := s.SendTaskToAgent(task); err != nil {
 		s.Logger.WithError(err).Error("Failed to send task to agent")
@@ -126,76 +148,6 @@ func (s *Server) handleAnalysisTask(task AnalysisTask) {
 	s.Logger.Infof("Analysis task %s completed", task.ID)
 }
 
-func (s *Server) RevertVM(agentConfig *AgentConfig) error {
-	hvapiConfig := agentConfig.HvapiConfig
-	vmName := agentConfig.Name
-
-	endpoint := fmt.Sprintf("%s/%s/%s/revert", hvapiConfig.URL, agentConfig.Provider, vmName)
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+hvapiConfig.AuthToken)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// TODO read error message from JSON
-		return fmt.Errorf("failed to revert VM, status code: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (s *Server) StartVM(agentConfig *AgentConfig) error {
-	hvapiConfig := agentConfig.HvapiConfig
-	vmName := agentConfig.Name
-
-	endpoint := fmt.Sprintf("%s/%s/%s/start", hvapiConfig.URL, agentConfig.Provider, vmName)
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+hvapiConfig.AuthToken)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to revert VM, status code: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (s *Server) StopVM(agentConfig *AgentConfig) error {
-	hvapiConfig := agentConfig.HvapiConfig
-	vmName := agentConfig.Name
-
-	endpoint := fmt.Sprintf("%s/%s/%s/stop", hvapiConfig.URL, agentConfig.Provider, vmName)
-	req, err := http.NewRequest("GET", endpoint, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+hvapiConfig.AuthToken)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to revert VM, status code: %d", resp.StatusCode)
-	}
-	return nil
-}
-
 // SendTaskToAgent sends the analysis task to the specified agent
 func (s *Server) SendTaskToAgent(task AnalysisTask) error {
 	ctx := context.Background()
@@ -208,7 +160,7 @@ func (s *Server) SendTaskToAgent(task AnalysisTask) error {
 	}
 
 	// Generate presigned URL for the file (valid for a reasonable duration)
-	fileURL, err := s.GeneratePresignedFileURL(ctx, file.S3Key, expiresIn)
+	fileURL, err := s.GeneratePresignedFileURLGet(ctx, file.S3Key, expiresIn)
 	if err != nil {
 		return fmt.Errorf("failed to generate file URL: %w", err)
 	}
