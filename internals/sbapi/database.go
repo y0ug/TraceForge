@@ -3,7 +3,10 @@ package sbapi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -28,6 +31,17 @@ func (d *DB) CreateTables() error {
         sha1 TEXT DEFAULT '',
         sha256 TEXT DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS analysis_tasks (
+      id UUID PRIMARY KEY,
+      file_id UUID NOT NULL REFERENCES file_uploads(id),
+      agent_id UUID NOT NULL,
+      plugin TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      args JSONB,
+      result JSONB,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
   `)
 	return err
 }
@@ -110,4 +124,98 @@ func (d *DB) GetAllS3Keys(ctx context.Context) ([]string, error) {
 	}
 
 	return s3Keys, nil
+}
+
+// CreateAnalysisTask inserts a new analysis task into the database
+func (d *DB) CreateAnalysisTask(ctx context.Context, task AnalysisTask) error {
+	_, err := d.DB.ExecContext(ctx, `
+        INSERT INTO analysis_tasks (id, file_id, agent_id, plugin, status, args, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, task.ID, task.FileID, task.AgentID, task.Plugin, task.Status, task.Args, task.CreatedAt, task.UpdatedAt)
+	return err
+}
+
+// GetAnalysisTasks retrieves all analysis tasks
+func (d *DB) GetAnalysisTasks(ctx context.Context) ([]AnalysisTask, error) {
+	rows, err := d.DB.QueryContext(ctx, `
+        SELECT id, file_id, agent_id, plugin, status, args, result, created_at, updated_at
+        FROM analysis_tasks
+        ORDER BY created_at DESC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []AnalysisTask
+	for rows.Next() {
+		var task AnalysisTask
+		var result sql.NullString
+		err := rows.Scan(&task.ID, &task.FileID, &task.AgentID, &task.Plugin, &task.Status, &task.Args, &result, &task.CreatedAt, &task.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		if result.Valid {
+			task.Result = json.RawMessage(result.String)
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+// UpdateAnalysisTaskStatus updates the status and result of an analysis task
+func (d *DB) UpdateAnalysisTaskStatus(ctx context.Context, taskID uuid.UUID, status string) error {
+	_, err := d.DB.ExecContext(ctx, `
+        UPDATE analysis_tasks
+        SET  status = $1, updated_at = $2
+        WHERE id = $3
+    `, status, time.Now(), taskID)
+	return err
+}
+
+func (d *DB) UpdateAnalysisTaskResults(ctx context.Context, taskID uuid.UUID, result interface{}) error {
+	var resultJSON []byte
+	var err error
+	if result != nil {
+		resultJSON, err = json.Marshal(result)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = d.DB.ExecContext(ctx, `
+        UPDATE analysis_tasks
+        SET result = $1, updated_at = $2
+        WHERE id = $3
+    `, resultJSON, time.Now(), taskID)
+	return err
+}
+
+// GetPendingAnalysisTasks retrieves analysis tasks with 'pending' status
+func (d *DB) GetPendingAnalysisTasks(ctx context.Context) ([]AnalysisTask, error) {
+	rows, err := d.DB.QueryContext(ctx, `
+        SELECT id, file_id, agent_id, plugin, status, args, result, created_at, updated_at
+        FROM analysis_tasks
+        WHERE status = 'pending'
+        ORDER BY created_at ASC
+    `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []AnalysisTask
+	for rows.Next() {
+		var task AnalysisTask
+		var result sql.NullString
+		err := rows.Scan(&task.ID, &task.FileID, &task.AgentID, &task.Plugin, &task.Status, &task.Args, &result, &task.CreatedAt, &task.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		if result.Valid {
+			task.Result = json.RawMessage(result.String)
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
 }

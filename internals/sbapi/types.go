@@ -2,7 +2,9 @@ package sbapi
 
 import (
 	"TraceForge/internals/commons"
+	"TraceForge/internals/mq"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -18,6 +20,7 @@ type Server struct {
 	RedisClient  *redis.Client
 	TaskManager  *TaskManager
 	AgentsConfig *AgentsConfig
+	MQClient     *mq.Client
 }
 
 type DB struct {
@@ -25,14 +28,13 @@ type DB struct {
 }
 
 type Config struct {
-	AuthToken      string
-	HvApiAuthToken string
-	HvApiUrl       string
-	S3BucketName   string
-	S3Region       string
-	S3Endpoint     string
-	S3AccessKey    string
-	S3SecretKey    string
+	AuthToken    string
+	S3BucketName string
+	S3Region     string
+	S3Endpoint   string
+	S3AccessKey  string
+	S3SecretKey  string
+	MqURL        string
 }
 
 type UploadResponse struct {
@@ -70,9 +72,28 @@ type HvapiAgentsConfig struct {
 }
 
 type AgentConfig struct {
-	Name      string   `toml:"name"`
-	AgentUUID string   `toml:"agent_uuid"`
-	Provider  string   `toml:"provider,omitempty"`
-	Plugins   []string `toml:"plugins,omitempty"`
-	HvapiName string   `toml:"hvapi_name,omitempty"`
+	ID          string            `toml:"agent_uuid"`
+	Name        string            `toml:"name"`
+	Provider    string            `toml:"provider,omitempty"`
+	Plugins     []string          `toml:"plugins,omitempty"`
+	HvapiName   string            `toml:"hvapi_name,omitempty"`
+	HvapiConfig HvapiAgentsConfig `toml:"-"`
+}
+
+type AnalysisTask struct {
+	ID        uuid.UUID       `json:"id"`
+	FileID    uuid.UUID       `json:"file_id"`
+	AgentID   uuid.UUID       `json:"agent_id"`
+	Plugin    string          `json:"plugin"`
+	Status    string          `json:"status"`
+	Args      json.RawMessage `json:"args,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type AgentInfo struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Plugins []string `json:"plugins,omitempty"`
 }

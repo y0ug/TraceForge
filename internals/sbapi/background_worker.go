@@ -14,7 +14,6 @@ import (
 func (s *Server) CleanOrphanFiles() error {
 	ctx := context.Background()
 
-	s.Logger.Info("Running Orphan File Cleaner")
 	// Step 1: Retrieve all S3 keys from the database
 	dbKeys, err := s.DB.GetAllS3Keys(ctx)
 	if err != nil {
@@ -73,11 +72,8 @@ func (s *Server) CleanOrphanFiles() error {
 
 	// Step 4: Delete orphaned files
 	if len(orphanKeys) == 0 {
-		s.Logger.Info("No orphaned files found")
 		return nil
 	}
-
-	s.Logger.Infof("Found %d orphaned files", len(orphanKeys))
 
 	const batchSize = 1000 // S3 DeleteObjects allows up to 1000 objects per request
 	for i := 0; i < len(orphanKeys); i += batchSize {
@@ -108,6 +104,5 @@ func (s *Server) CleanOrphanFiles() error {
 
 		s.Logger.Infof("Deleted %d orphaned files", len(objectsToDelete))
 	}
-	s.Logger.Info("Orphan File Cleaner completed successfully")
 	return nil
 }

@@ -24,38 +24,30 @@ func LoadAgentsConfig(filePath string) (*AgentsConfig, error) {
 		return nil, err
 	}
 
-	// Apply defaults to agents
-	applyDefaults(agentsConfig)
-
-	// Now you can access your configuration
-	fmt.Println("Hvapi Config:")
+	hvapiServers := make(map[string]HvapiAgentsConfig)
 	for name, hvapi := range agentsConfig.Hvapi {
-		fmt.Printf("  %s: %+v\n", name, hvapi)
+		hvapiServers[name] = hvapi
 	}
 
-	fmt.Println("Agents:")
-	for _, agent := range agentsConfig.Agents {
-		fmt.Printf("  Name: %s\n", agent.Name)
-		fmt.Printf("    UUID: %s\n", agent.AgentUUID)
-		fmt.Printf("    Provider: %s\n", agent.Provider)
-		fmt.Printf("    Plugins: %v\n", agent.Plugins)
-		fmt.Printf("    HvName: %s\n", agent.HvapiName)
+	// Apply defaults and resolve HVAPI servers for agents
+	for i := range agentsConfig.Agents {
+		agent := &agentsConfig.Agents[i]
+		if len(agent.Plugins) == 0 {
+			agent.Plugins = agentsConfig.AgentDefaults.Plugins
+		}
+		if agent.HvapiName == "" {
+			agent.HvapiName = agentsConfig.AgentDefaults.HvapiName
+		}
+		if agent.Provider == "" {
+			agent.Provider = agentsConfig.AgentDefaults.Provider
+		}
+		// Assign the HVAPI server configuration to the agent
+		hvapiConfig, exists := hvapiServers[agent.HvapiName]
+		if !exists {
+			return nil, fmt.Errorf("HVAPI server %s not found for agent %s", agent.HvapiName, agent.Name)
+		}
+		agent.HvapiConfig = hvapiConfig
 	}
 
 	return agentsConfig, nil
-}
-
-func applyDefaults(config *AgentsConfig) {
-	for i := range config.Agents {
-		agent := &config.Agents[i]
-		if len(agent.Plugins) == 0 {
-			agent.Plugins = config.AgentDefaults.Plugins
-		}
-		if agent.HvapiName == "" {
-			agent.HvapiName = config.AgentDefaults.HvapiName
-		}
-		if agent.Provider == "" {
-			agent.Provider = config.AgentDefaults.Provider
-		}
-	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"TraceForge/internals/commons"
+	"TraceForge/internals/mq"
 	"TraceForge/internals/sbapi"
 	"fmt"
 	"net/http"
@@ -52,14 +53,13 @@ func main() {
 
 	redisClient := redis.NewClient(opt)
 	config := sbapi.Config{
-		AuthToken:      commons.GetEnv("AUTH_TOKEN"),
-		HvApiAuthToken: commons.GetEnv("HV_API_AUTH_TOKEN"),
-		HvApiUrl:       commons.GetEnv("HV_API_URL"),
-		S3BucketName:   commons.GetEnv("S3_BUCKET_NAME"),
-		S3Region:       commons.GetEnv("S3_REGION"),
-		S3Endpoint:     commons.GetEnv("S3_ENDPOINT"),
-		S3AccessKey:    commons.GetEnv("S3_ACCESS_KEY"),
-		S3SecretKey:    commons.GetEnv("S3_SECRET_KEY"),
+		AuthToken:    commons.GetEnv("AUTH_TOKEN"),
+		S3BucketName: commons.GetEnv("S3_BUCKET_NAME"),
+		S3Region:     commons.GetEnv("S3_REGION"),
+		S3Endpoint:   commons.GetEnv("S3_ENDPOINT"),
+		S3AccessKey:  commons.GetEnv("S3_ACCESS_KEY"),
+		S3SecretKey:  commons.GetEnv("S3_SECRET_KEY"),
+		MqURL:        commons.GetEnv("MQ_URL"),
 	}
 
 	s3Client := s3.NewFromConfig(aws.Config{
@@ -88,7 +88,16 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to load agents config")
 	}
+	// Now you can access your configuration
+	for name, hvapi := range agentsConfig.Hvapi {
+		logger.Infof("HvAPI config  %s: %s\n", name, hvapi.URL)
+	}
 
+	for _, agent := range agentsConfig.Agents {
+		logger.Infof("Agent: %s: %+v", agent.Name, agent)
+	}
+
+	mqClient := mq.NewClient(config.MqURL)
 	server := &sbapi.Server{
 		Server:       &commons.Server{Logger: logger},
 		Config:       config,
@@ -97,9 +106,15 @@ func main() {
 		RedisClient:  redisClient,
 		TaskManager:  taskManager,
 		AgentsConfig: agentsConfig,
+		MQClient:     mqClient,
 	}
 
 	_, err = taskManager.AddTask("CleanupTask", "* * * * *", server.CleanOrphanFiles)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to add CleanupTask")
+	}
+
+	_, err = taskManager.AddTask("AnalysisTaskProcessor", "", server.StartAnalysisTaskProcessor)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to add CleanupTask")
 	}
@@ -120,6 +135,10 @@ func main() {
 	router.HandleFunc("/tasks", server.TasksHandler).Methods("GET")
 	router.HandleFunc("/tasks/{task_name}/run", server.RunTaskHandler).Methods("GET")
 
+	router.HandleFunc("/analysis_tasks", server.CreateAnalysisTaskHandler).Methods("POST")
+	router.HandleFunc("/analysis_tasks", server.GetAnalysisTasksHandler).Methods("GET")
+
+	router.HandleFunc("/agents", server.GetAgentsHandler).Methods("GET")
 	router.Use(server.LoggingMiddleware())
 	router.Use(server.AuthMiddleware)
 

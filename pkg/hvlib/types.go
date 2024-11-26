@@ -18,10 +18,8 @@ type Snapshot struct {
 }
 
 type VM struct {
-	ID      string
-	Path    string
-	AgentID string
-	Plugins []string
+	ID   string
+	Path string
 }
 
 type VmNotFoundError struct {
@@ -53,6 +51,7 @@ type VP struct {
 type VmwareVP struct {
 	VP
 	InstallPath string
+	VMPath      string
 }
 
 type VirtualizationProvider interface {

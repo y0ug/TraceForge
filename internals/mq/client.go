@@ -17,11 +17,13 @@ func NewClient(serverURL string) *Client {
 	}
 }
 
-func (c *Client) PushMessage(agentID, body string) error {
-	pushBody := map[string]string{"agent_id": agentID, "body": body}
+func (c *Client) PushMessage(queueID, body string) error {
+	pushBody := map[string]string{"body": body}
 	pushData, _ := json.Marshal(pushBody)
 
-	resp, err := http.Post(c.serverURL+"/push", "application/json", bytes.NewReader(pushData))
+	url := fmt.Sprintf("%s/%s", c.serverURL, queueID)
+	resp, err := http.Post(url, "application/json",
+		bytes.NewReader(pushData))
 	if err != nil {
 		return fmt.Errorf("failed to push message: %w", err)
 	}
@@ -35,8 +37,8 @@ func (c *Client) PushMessage(agentID, body string) error {
 	return nil
 }
 
-func (c *Client) PullMessage(agentID string) (*MessageResponse, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/pull/%s", c.serverURL, agentID))
+func (c *Client) PullMessage(queueID string) (*MessageResponse, error) {
+	resp, err := http.Get(fmt.Sprintf("%s/%s", c.serverURL, queueID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to pull message: %w", err)
 	}
@@ -56,7 +58,7 @@ func (c *Client) PullMessage(agentID string) (*MessageResponse, error) {
 
 func (c *Client) DeleteMessage(messageID string) error {
 	req, err := http.NewRequest(http.MethodDelete,
-		fmt.Sprintf("%s/delete/%s", c.serverURL, messageID),
+		fmt.Sprintf("%s/message/%s", c.serverURL, messageID),
 		nil)
 	if err != nil {
 		return fmt.Errorf("failed to create delete request: %w", err)

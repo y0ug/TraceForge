@@ -43,7 +43,8 @@ func GetMessage(ctx context.Context, db *sql.DB, agentID string) (*Message, erro
 		SELECT id, agent_id, body, created_at, visible_at 
 		FROM messages 
 		WHERE agent_id = ? AND visible_at <= CURRENT_TIMESTAMP 
-		ORDER BY created_at ASC LIMIT 1`, agentID).Scan(&msg.ID, &msg.AgentID, &msg.Body, &msg.CreatedAt, &msg.VisibleAt)
+		ORDER BY created_at ASC LIMIT 1`, agentID).
+		Scan(&msg.ID, &msg.QueueID, &msg.Body, &msg.CreatedAt, &msg.VisibleAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			// No message found

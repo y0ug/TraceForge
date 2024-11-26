@@ -10,7 +10,29 @@ import (
 
 func (v *VmwareVP) LoadVMs(loader *ConfigLoader) error {
 	v.InstallPath = loader.GetString("vmware.install_path")
-	return v.VP.LoadVMs(loader, "vmware")
+	v.VMPath = loader.GetString("vmware.vm_path")
+	v.VP.VMs = make(map[string]VM)
+
+	// Scan VMPath for .vmx files
+	err := filepath.Walk(v.VMPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// If it's a .vmx file, add it to the VMs map
+		if !info.IsDir() && strings.HasSuffix(info.Name(), ".vmx") {
+			vmName := strings.TrimSuffix(info.Name(), ".vmx")
+			v.VP.VMs[vmName] = VM{
+				Path: path,
+				// ID is optional or can be generated
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to scan VMs: %v", err)
+	}
+
+	return nil
 }
 
 func (v *VmwareVP) List() ([]VMStatus, error) {

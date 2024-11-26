@@ -47,7 +47,7 @@ func (p *DlExecPlugin) Handle(task Task, sendStatusUpdate func(string)) (interfa
 	sendStatusUpdate("Downloading file...")
 	filePath, err := downloadFileToTemp(args.URL, filename)
 	if err != nil {
-		sendStatusUpdate(fmt.Sprintf("Failed to download file: %v", err))
+		sendStatusUpdate(fmt.Sprintf("Failed to download file from %s: %v", args.URL, err))
 		return &DlExecPluginResponse{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to download file: %v", err),

@@ -31,6 +31,7 @@ func (s *Server) GetFilesHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	expiresIn := 15 * time.Minute
 
 	// Generate UUID for upload ID
 	uploadID := uuid.New().String()
@@ -38,18 +39,8 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	// Create S3 key
 	s3Key := fmt.Sprintf("uploads/%s.bin", uploadID)
 
-	// Create presigned URL
-	presignClient := s3.NewPresignClient(s.S3Client)
-	putObjectInput := &s3.PutObjectInput{
-		Bucket:      aws.String(s.Config.S3BucketName),
-		Key:         aws.String(s3Key),
-		ContentType: aws.String("application/octet-stream"),
-	}
-	expiresIn := time.Minute * 15
-
-	presignedReq, err := presignClient.PresignPutObject(ctx, putObjectInput, s3.WithPresignExpires(expiresIn))
+	fileURL, err := s.GeneratePresignedFileURL(ctx, s3Key, expiresIn)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to generate presigned URL")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -63,7 +54,7 @@ func (s *Server) GetPresignedURLHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response := UploadResponse{
-		UploadURL: presignedReq.URL,
+		UploadURL: fileURL,
 		FileID:    uploadID,
 		Key:       s3Key,
 		ExpiresIn: int64(expiresIn.Seconds()),
@@ -384,4 +375,88 @@ func (s *Server) RunTaskHandler(w http.ResponseWriter, r *http.Request) {
 	// Refresh task
 	task, _ = s.TaskManager.GetTask(taskName)
 	commons.WriteSuccessResponse(w, "Task started", task)
+}
+
+func (s *Server) CreateAnalysisTaskHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var params struct {
+		FileID  uuid.UUID `json:"file_id"`
+		AgentID uuid.UUID `json:"agent_id"`
+		Plugin  string    `json:"plugin"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+		s.Logger.WithError(err).Error("Failed to decode request body")
+		commons.WriteErrorResponse(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	args := map[string]interface{}{
+		"test": "value",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to encode analysis parameters")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	taskID := uuid.New()
+	now := time.Now()
+	err = s.DB.CreateAnalysisTask(ctx, AnalysisTask{
+		ID:        taskID,
+		FileID:    params.FileID,
+		AgentID:   params.AgentID,
+		Plugin:    params.Plugin,
+		Args:      jsonArgs,
+		Status:    "pending",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to create analysis task")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	commons.WriteSuccessResponse(w, "Analysis task created", map[string]interface{}{
+		"task_id": taskID,
+	})
+}
+
+// GetAnalysisTasksHandler retrieves analysis tasks
+func (s *Server) GetAnalysisTasksHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	tasks, err := s.DB.GetAnalysisTasks(ctx)
+	if err != nil {
+		s.Logger.WithError(err).Error("Failed to get analysis tasks")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	commons.WriteSuccessResponse(w, "", tasks)
+}
+
+func (s *Server) GetAgentsHandler(w http.ResponseWriter, r *http.Request) {
+	// ctx := r.Context()
+
+	var agentsInfo []AgentInfo
+
+	for _, agent := range s.AgentsConfig.Agents {
+
+		agentInfo := AgentInfo{
+			ID:      agent.ID,
+			Name:    agent.Name,
+			Plugins: agent.Plugins,
+		}
+		agentsInfo = append(agentsInfo, agentInfo)
+	}
+
+	if err := json.NewEncoder(w).Encode(agentsInfo); err != nil {
+		s.Logger.WithError(err).Error("Failed to encode agents info")
+		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }

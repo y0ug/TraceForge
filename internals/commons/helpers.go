@@ -32,7 +32,7 @@ func getClientIP(r *http.Request) string {
 	return clientIP
 }
 
-func WriteJSONResponse(w http.ResponseWriter, httpStatus int, data HttpResp) {
+func WriteJSONResponse(w http.ResponseWriter, httpStatus int, data *HttpResp) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
 
@@ -42,17 +42,17 @@ func WriteJSONResponse(w http.ResponseWriter, httpStatus int, data HttpResp) {
 func WriteSuccessResponse(w http.ResponseWriter, message string, data interface{}) {
 	WriteJSONResponse(w,
 		http.StatusOK,
-		HttpResp{Status: "success", Data: data, Message: message})
+		&HttpResp{Status: "success", Data: data, Message: message})
 }
 
 func WriteErrorResponse(w http.ResponseWriter, message string, httpStatus int) {
 	WriteJSONResponse(w,
 		httpStatus,
-		HttpResp{Status: "error", Data: nil, Message: message})
+		&HttpResp{Status: "error", Data: nil, Message: message})
 }
 
 func WriteErrorResponseData(w http.ResponseWriter, message string, data interface{}, httpStatus int) {
 	WriteJSONResponse(w,
 		httpStatus,
-		HttpResp{Status: "error", Data: data, Message: message})
+		&HttpResp{Status: "error", Data: data, Message: message})
 }

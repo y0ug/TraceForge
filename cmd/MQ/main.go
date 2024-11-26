@@ -53,9 +53,9 @@ func main() {
 
 	// Set up routes
 	router := mux.NewRouter()
-	router.HandleFunc("/push", server.PushMessageHandler).Methods(http.MethodPost)
-	router.HandleFunc("/pull/{agent_id}", server.PullMessageHandler).Methods(http.MethodGet)
-	router.HandleFunc("/delete/{message_id}", server.DeleteMessageHandler).Methods(http.MethodDelete)
+	router.HandleFunc("/{queue_id}", server.PushMessageHandler).Methods(http.MethodPost)
+	router.HandleFunc("/{queue_id}", server.PullMessageHandler).Methods(http.MethodGet)
+	router.HandleFunc("/message/{message_id}", server.DeleteMessageHandler).Methods(http.MethodDelete)
 	router.Use(server.LoggingMiddleware())
 
 	listenOn := fmt.Sprintf(":%s", port)

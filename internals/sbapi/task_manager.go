@@ -66,9 +66,16 @@ func (tm *TaskManager) AddTask(name string, schedule string, job func() error) (
 		tm.TaskMutex.Unlock()
 	}
 
-	id, err := tm.Cron.AddFunc(schedule, wrappedJob)
-	if err != nil {
-		return nil, err
+	// Schedule can be empty to run the job immediately
+	var id cron.EntryID
+	var err error
+
+	id = -1
+	if schedule != "" {
+		id, err = tm.Cron.AddFunc(schedule, wrappedJob)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	task := &Task{
@@ -78,6 +85,11 @@ func (tm *TaskManager) AddTask(name string, schedule string, job func() error) (
 		Status:   "stopped",
 		Enabled:  true,
 		Job:      wrappedJob,
+	}
+
+	// Run the job immediately if schedule is empty
+	if id == -1 {
+		go task.Job()
 	}
 	tm.Tasks[name] = task
 	return task, nil

@@ -21,7 +21,7 @@ type ServerSQS struct {
 
 type Message struct {
 	ID        string    `json:"id"`
-	AgentID   string    `json:"agent_id"`
+	QueueID   string    `json:"queue_id"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 	VisibleAt time.Time `json:"visible_at"`
@@ -29,7 +29,7 @@ type Message struct {
 
 type MessageResponse struct {
 	ID        string    `json:"id"`
-	AgentID   string    `json:"agent_id"`
+	QueueID   string    `json:"queue_id"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 }

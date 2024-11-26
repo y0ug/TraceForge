@@ -1,14 +1,13 @@
 package sbapi
 
 import (
-	"TraceForge/internals/commons"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/uuid"
 )
 
 func (s *Server) fileExistsInS3(ctx context.Context, key string) (bool, error) {
@@ -20,83 +19,38 @@ func (s *Server) fileExistsInS3(ctx context.Context, key string) (bool, error) {
 	return err != nil, nil
 }
 
-func (s *Server) getProvidersFromHvapi() ([]string, error) {
-	hvapiUrl := s.Config.HvApiUrl
-	hvapiAuthToken := s.Config.HvApiAuthToken
-
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", hvapiUrl+"/providers", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request to hvapi /providers: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+hvapiAuthToken)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get providers from hvapi: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hvapi returned non-OK status: %d", resp.StatusCode)
-	}
-
-	var hvapiResp commons.HttpResp
-	err = json.NewDecoder(resp.Body).Decode(&hvapiResp)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode providers response: %w", err)
-	}
-
-	data, ok := hvapiResp.Data.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid providers data format")
-	}
-
-	providers := make([]string, 0, len(data))
-	for _, item := range data {
-		provider, ok := item.(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid provider name format")
+func (s *Server) getAgentConfigByID(agentID uuid.UUID) (*AgentConfig, error) {
+	for _, agent := range s.AgentsConfig.Agents {
+		if agent.ID == agentID.String() {
+			return &agent, nil
 		}
-		providers = append(providers, provider)
 	}
-
-	return providers, nil
+	return nil, fmt.Errorf("agent with ID %s not found", agentID)
 }
 
-func (s *Server) getVmsFromHvapi(provider string) (interface{}, error) {
-	hvapiUrl := s.Config.HvApiUrl
-	hvapiAuthToken := s.Config.HvApiAuthToken
+func (s *Server) GeneratePresignedFileURL(ctx context.Context, s3Key string, expiresIn time.Duration) (string, error) {
+	// Create presigned URL
+	presignClient := s3.NewPresignClient(s.S3Client)
+	putObjectInput := &s3.GetObjectInput{
+		Bucket: aws.String(s.Config.S3BucketName),
+		Key:    aws.String(s3Key),
+	}
 
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", hvapiUrl, provider), nil)
+	presignedReq, err := presignClient.PresignGetObject(ctx, putObjectInput, s3.WithPresignExpires(expiresIn))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request to hvapi for provider %s: %w", provider, err)
+		s.Logger.WithError(err).Error("Failed to generate presigned URL")
+		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+hvapiAuthToken)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get VMs for provider %s: %w", provider, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("hvapi returned non-OK status %d for provider %s", resp.StatusCode, provider)
-	}
-
-	var hvapiResp commons.HttpResp
-	err = json.NewDecoder(resp.Body).Decode(&hvapiResp)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode VMs response for provider %s: %w", provider, err)
-	}
-
-	return hvapiResp.Data, nil
+	return presignedReq.URL, nil
 }
 
-func structToMap(data interface{}) map[string]interface{} {
-	var result map[string]interface{}
-	temp, _ := json.Marshal(data)
-	json.Unmarshal(temp, &result)
-	return result
+func (s *Server) acquireVMLock(vmName string, timeout time.Duration) (bool, error) {
+	lockKey := fmt.Sprintf("vm_lock:%s", vmName)
+	success, err := s.RedisClient.SetNX(context.Background(), lockKey, "locked", timeout).Result()
+	return success, err
+}
+
+func (s *Server) releaseVMLock(vmName string) {
+	lockKey := fmt.Sprintf("vm_lock:%s", vmName)
+	s.RedisClient.Del(context.Background(), lockKey)
 }

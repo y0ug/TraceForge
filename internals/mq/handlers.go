@@ -12,9 +12,10 @@ import (
 // PushMessage handles adding messages to a specific agent's queue
 func (s *ServerSQS) PushMessageHandler(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AgentID string `json:"agent_id"`
-		Body    string `json:"body"`
+		Body string `json:"body"`
 	}
+	vars := mux.Vars(r)
+	queueID := vars["queue_id"]
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.Logger.WithError(err).Error("Invalid request body")
@@ -22,7 +23,7 @@ func (s *ServerSQS) PushMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := CreateMessage(r.Context(), s.DB, body.AgentID, body.Body)
+	err := CreateMessage(r.Context(), s.DB, queueID, body.Body)
 	if err != nil {
 		s.Logger.WithError(err).Error("failed to create message")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -30,10 +31,11 @@ func (s *ServerSQS) PushMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Logger.WithFields(logrus.Fields{
-		"agent_id": body.AgentID,
+		"queue_id": queueID,
 		"body":     body.Body,
 	}).Info("message pushed successfully")
-	commons.WriteSuccessResponse(w, "Message pushed successfully", nil)
+	commons.WriteJSONResponse(w, http.StatusCreated,
+		&commons.HttpResp{Status: "success", Data: nil, Message: "Message pushed successfully"})
 }
 
 // PullMessage handles fetching the next message for an agent
@@ -41,17 +43,17 @@ func (s *ServerSQS) PullMessageHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	vars := mux.Vars(r)
-	agentID := vars["agent_id"]
+	queueID := vars["queue_id"]
 
 	// TODO used a SQL transaction
-	msg, err := GetMessage(ctx, s.DB, agentID)
+	msg, err := GetMessage(ctx, s.DB, queueID)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to retrieve message")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	if msg == nil {
-		s.Logger.WithField("agent_id", agentID).Info("no messages available")
+		s.Logger.WithField("queue_id", queueID).Info("no messages available")
 		commons.WriteErrorResponse(w, "no messages available", http.StatusNotFound)
 		return
 	}
@@ -65,7 +67,7 @@ func (s *ServerSQS) PullMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Logger.WithFields(logrus.Fields{
-		"agent_id": msg.AgentID,
+		"queue_id": msg.QueueID,
 		"message":  msg.Body,
 	}).Info("Message pulled successfully")
 	json.NewEncoder(w).Encode(msg)

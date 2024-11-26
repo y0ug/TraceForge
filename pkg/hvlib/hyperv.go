@@ -10,7 +10,31 @@ import (
 )
 
 func (h *HypervVP) LoadVMs(loader *ConfigLoader) error {
-	return h.VP.LoadVMs(loader, "hyperv")
+	h.VP.VMs = make(map[string]VM)
+
+	// Run PowerShell command to list VMs
+	cmd := exec.Command("powershell", "-Command", "Get-VM | Select-Object Name,Id | ConvertTo-Json")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to list VMs: %v", err)
+	}
+
+	// Parse JSON output
+	var vms []struct {
+		Name string `json:"Name"`
+		ID   string `json:"Id"`
+	}
+	if err := json.Unmarshal(output, &vms); err != nil {
+		return fmt.Errorf("failed to parse VMs list: %v", err)
+	}
+
+	// Populate the VMs map
+	for _, vm := range vms {
+		h.VP.VMs[vm.Name] = VM{
+			ID: vm.ID,
+		}
+	}
+	return nil
 }
 
 func (h *HypervVP) List() ([]VMStatus, error) {
@@ -46,13 +70,11 @@ func (h *HypervVP) listVMs(command string) ([]VMStatus, error) {
 	// Match with the config
 	var results []VMStatus
 	for _, vm := range vms {
-		if _, exists := h.VMs[vm.Name]; exists {
-			results = append(results, VMStatus{
-				ID:    vm.ID,
-				Name:  vm.Name,
-				State: stateMap[vm.State],
-			})
-		}
+		results = append(results, VMStatus{
+			ID:    vm.ID,
+			Name:  vm.Name,
+			State: stateMap[vm.State],
+		})
 	}
 	return results, nil
 }
