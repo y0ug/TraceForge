@@ -165,7 +165,7 @@ func (s *Server) SendTaskToAgent(task AnalysisTask) error {
 		return fmt.Errorf("failed to generate file URL: %w", err)
 	}
 
-	s.Logger.Infof("url %s", fileURL)
+	s.Logger.Debugf("url %s", fileURL)
 	args := map[string]interface{}{
 		"url": fileURL,
 	}
@@ -185,7 +185,7 @@ func (s *Server) SendTaskToAgent(task AnalysisTask) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal task args: %w", err)
 	}
-	s.Logger.Infof("jsonArgs: %s", jsonArgs)
+	s.Logger.Debugf("jsonArgs: %s", jsonArgs)
 
 	// Prepare task message for the agent
 	// TODO fileURL is in Data

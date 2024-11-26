@@ -274,14 +274,7 @@ func (s *Server) GetFileDlHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Logger.WithFields(log.Fields{"id": fileID}).Info("file info")
 
-	presigner := s3.NewPresignClient(s.S3Client)
-	req := &s3.GetObjectInput{
-		Bucket: aws.String(s.Config.S3BucketName),
-		Key:    aws.String(file.S3Key),
-	}
-	presignedURL, err := presigner.PresignGetObject(ctx, req, func(opts *s3.PresignOptions) {
-		opts.Expires = expiresIn
-	})
+	presignedURL, err := s.GeneratePresignedFileURLGet(ctx, file.S3Key, expiresIn)
 	if err != nil {
 		s.Logger.WithError(err).Error("Failed to generate presigned URL")
 		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
@@ -381,9 +374,9 @@ func (s *Server) CreateAnalysisTaskHandler(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 
 	var params struct {
-		FileID  uuid.UUID `json:"file_id"`
 		AgentID uuid.UUID `json:"agent_id"`
 		Plugin  string    `json:"plugin"`
+		FileID  uuid.UUID `json:"file_id"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {

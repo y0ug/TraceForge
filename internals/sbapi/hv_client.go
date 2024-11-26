@@ -31,7 +31,7 @@ func NewHvClient(baseURL, apiKey string) *HvClient {
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		HTTPClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
 }
