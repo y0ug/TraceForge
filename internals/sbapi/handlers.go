@@ -374,9 +374,10 @@ func (s *Server) CreateAnalysisTaskHandler(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 
 	var params struct {
-		AgentID uuid.UUID `json:"agent_id"`
-		Plugin  string    `json:"plugin"`
-		FileID  uuid.UUID `json:"file_id"`
+		AgentID uuid.UUID       `json:"agent_id"`
+		Plugin  string          `json:"plugin"`
+		FileID  uuid.UUID       `json:"file_id"`
+		Args    json.RawMessage `json:"args"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
@@ -384,25 +385,22 @@ func (s *Server) CreateAnalysisTaskHandler(w http.ResponseWriter, r *http.Reques
 		commons.WriteErrorResponse(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	args := map[string]interface{}{
-		"test": "value",
-	}
 
-	jsonArgs, err := json.Marshal(args)
-	if err != nil {
-		s.Logger.WithError(err).Error("Failed to encode analysis parameters")
-		commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	// jsonArgs, err := json.Marshal(params.Args)
+	// if err != nil {
+	// 	s.Logger.WithError(err).Error("Failed to encode analysis parameters")
+	// 	commons.WriteErrorResponse(w, "Internal server error", http.StatusInternalServerError)
+	// 	return
+	// }
 
 	taskID := uuid.New()
 	now := time.Now()
-	err = s.DB.CreateAnalysisTask(ctx, AnalysisTask{
+	err := s.DB.CreateAnalysisTask(ctx, AnalysisTask{
 		ID:        taskID,
 		FileID:    params.FileID,
 		AgentID:   params.AgentID,
 		Plugin:    params.Plugin,
-		Args:      jsonArgs,
+		Args:      params.Args,
 		Status:    "pending",
 		CreatedAt: now,
 		UpdatedAt: now,

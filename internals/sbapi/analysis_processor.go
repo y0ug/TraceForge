@@ -38,6 +38,16 @@ func (s *Server) StartAgentTaskWorker(agentID string) error {
 
 	hvClient := NewHvClient(agentConfig.HvapiConfig.URL, agentConfig.HvapiConfig.AuthToken)
 
+	// We are stopping the VM to ensure a clean start
+	_, err = hvClient.StopVM(ctx, agentConfig.Provider, agentConfig.Name)
+	if err != nil {
+		if hvErr, ok := err.(*HvError); ok {
+			s.Logger.Errorf("HV API Error during StopVM - %s: %s", hvErr.Status, hvErr.Message)
+		} else {
+			s.Logger.WithError(err).Error("Failed to stop VM")
+		}
+	}
+
 	for {
 		task, err := s.DB.GetNextPendingAnalysisTaskForAgent(ctx, agentID)
 		if err != nil {
@@ -99,23 +109,23 @@ func (s *Server) handleAnalysisTask(task AnalysisTask, hvClient *HvClient) {
 	}
 
 	// Defer stopping the VM using HvClient
-	defer func() {
-		resp, err := hvClient.StopVM(ctx, agentConfig.Provider, agentConfig.Name)
-		if err != nil {
-			if hvErr, ok := err.(*HvError); ok {
-				s.Logger.Errorf("HV API Error during StopVM - %s: %s", hvErr.Status, hvErr.Message)
-			} else {
-				s.Logger.WithError(err).Error("Failed to stop VM")
-			}
-			s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
-			return
-		}
-		if resp.Status != "success" {
-			s.Logger.Errorf("Failed to stop VM: %s", resp.Message)
-			s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
-			return
-		}
-	}()
+	// defer func() {
+	// 	resp, err := hvClient.StopVM(ctx, agentConfig.Provider, agentConfig.Name)
+	// 	if err != nil {
+	// 		if hvErr, ok := err.(*HvError); ok {
+	// 			s.Logger.Errorf("HV API Error during StopVM - %s: %s", hvErr.Status, hvErr.Message)
+	// 		} else {
+	// 			s.Logger.WithError(err).Error("Failed to stop VM")
+	// 		}
+	// 		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
+	// 		return
+	// 	}
+	// 	if resp.Status != "success" {
+	// 		s.Logger.Errorf("Failed to stop VM: %s", resp.Message)
+	// 		s.DB.UpdateAnalysisTaskStatus(ctx, task.ID, "failed")
+	// 		return
+	// 	}
+	// }()
 
 	// Send task to agent
 	if err := s.SendTaskToAgent(task); err != nil {

@@ -50,6 +50,9 @@ func main() {
 		"dlexec": func() (agent.Plugin, error) {
 			return agent.NewDlExecPlugin()
 		},
+		"tiny_tracer": func() (agent.Plugin, error) {
+			return agent.NewTinyTracerPlugin()
+		},
 	}
 
 	for name, factory := range pluginFactories {
@@ -57,8 +60,8 @@ func main() {
 	}
 
 	// List of plugin names to load
-	pluginNames := []string{"example", "exec", "dlexec"}
-
+	pluginNames := []string{"example", "exec", "dlexec", "tiny_tracer"}
+	logger.WithField("pluginNames", pluginNames).Info("Loading plugins")
 	if err := pluginManager.LoadPlugins(pluginNames); err != nil {
 		logger.WithError(err).Fatal("Failed to load plugins")
 	}

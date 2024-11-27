@@ -27,14 +27,6 @@ func (s *Server) ListProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	commons.WriteSuccessResponse(w, "", providerNames)
 }
 
-func (s *Server) ListAgents(w http.ResponseWriter, r *http.Request) {
-	providerNames := make([]string, 0, len(s.Providers.Providers))
-	for name := range s.Providers.Providers {
-		providerNames = append(providerNames, name)
-	}
-	commons.WriteSuccessResponse(w, "", providerNames)
-}
-
 // ListVMsHandler godoc
 // @Summary List virtual machines
 // @Description Get a list of virtual machines for a given provider
@@ -84,6 +76,7 @@ func (s *Server) SnapshotsVMHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vmName := vars["vmname"]
+
 	snapshots, err := provider.ListSnapshots(vmName)
 	if err != nil {
 		httpStatus := http.StatusInternalServerError
@@ -107,6 +100,7 @@ func (s *Server) SnapshotsVMHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/start [get]
@@ -125,6 +119,7 @@ func (s *Server) StartVMHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/stop [get]
@@ -143,6 +138,7 @@ func (s *Server) StopVMHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/suspend [get]
@@ -161,6 +157,7 @@ func (s *Server) SuspendVMHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/revert [get]
@@ -179,6 +176,7 @@ func (s *Server) RevertVMHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/reset [get]
@@ -198,6 +196,7 @@ func (s *Server) ResetVMHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/snapshot/{snapshotname} [get]
@@ -210,6 +209,13 @@ func (s *Server) TakeSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 
 	vmName := vars["vmname"]
 	snapshotName := vars["snapshotname"]
+
+	// Acquire the lock for this VM
+	if !s.TryAcquireLock(vmName) {
+		commons.WriteErrorResponse(w, "Another operation is in progress for this VM", http.StatusConflict)
+		return
+	}
+	defer s.ReleaseLock(vmName) // Ensure the lock is released
 
 	err := provider.TakeSnapshot(vmName, snapshotName)
 	if err != nil {
@@ -239,6 +245,7 @@ func (s *Server) TakeSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} commons.HttpResp
 // @Failure 400 {object} commons.HttpResp
 // @Failure 404 {object} commons.HttpResp
+// @Failure 409 {object} commons.HttpResp // Conflict
 // @Failure 500 {object} commons.HttpResp
 // @Security ApiKeyAuth
 // @Router /{provider}/{vmname}/snapshot/{snapshotname} [delete]
@@ -251,6 +258,13 @@ func (s *Server) DeleteSnapshotHandler(w http.ResponseWriter, r *http.Request) {
 
 	vmName := vars["vmname"]
 	snapshotName := vars["snapshotname"]
+
+	// Acquire the lock for this VM
+	if !s.TryAcquireLock(vmName) {
+		commons.WriteErrorResponse(w, "Another operation is in progress for this VM", http.StatusConflict)
+		return
+	}
+	defer s.ReleaseLock(vmName) // Ensure the lock is released
 
 	err := provider.DeleteSnapshot(vmName, snapshotName)
 	if err != nil {
@@ -277,6 +291,13 @@ func (s *Server) basicVMActionHandler(w http.ResponseWriter, r *http.Request, ac
 	}
 
 	vmName := vars["vmname"]
+
+	// Acquire the lock for this VM
+	if !s.TryAcquireLock(vmName) {
+		commons.WriteErrorResponse(w, "Another operation is in progress for this VM", http.StatusConflict)
+		return
+	}
+	defer s.ReleaseLock(vmName)
 	var err error
 
 	// Perform action

@@ -16,4 +16,7 @@ type Server struct {
 	*commons.Server
 	Providers *ProviderRegistry
 	AuthToken string
+
+	// Add a sync.Map to hold per-VM locks
+	vmLocks sync.Map // map[string]*sync.Mutex
 }
